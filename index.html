@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+  <title>Glass Pitch</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- ============================================================ -->
+    <!-- TITLE                                                         -->
+    <!-- ============================================================ -->
+    <div id="title" class="screen">
+      <div class="title-frame">
+        <div class="title-pitch-bg" aria-hidden="true">
+          <div class="tp-circle"></div>
+          <div class="tp-halfway"></div>
+          <div class="tp-box tp-box-top"></div>
+          <div class="tp-box tp-box-bottom"></div>
+        </div>
+        <div class="title-emblem" aria-hidden="true">
+          <div class="title-ball"></div>
+        </div>
+        <h1 class="title-name">GLASS&nbsp;PITCH</h1>
+        <div class="title-divider"></div>
+        <p class="title-tagline">Holographic soccer for Meta Ray-Ban Display</p>
+        <nav class="title-menu">
+          <button class="title-btn focusable" data-action="quick-match">Kick Off</button>
+          <button class="title-btn focusable" data-action="goto-cup">Cup</button>
+          <button class="title-btn focusable" data-action="choose-teams">Choose Teams</button>
+          <button class="title-btn focusable" data-action="goto-how">How to Play</button>
+          <button class="title-btn focusable" data-action="goto-settings">Settings</button>
+        </nav>
+        <p class="title-record" id="title-record"></p>
+        <p class="title-hint">↑↓ navigate &middot; pinch to select</p>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TEAM SELECT (reused for "your team" and "opponent")          -->
+    <!-- ============================================================ -->
+    <div id="team-select" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1 id="ts-title">Select Your Team</h1>
+        <span class="header-meta" id="ts-step">1 / 2</span>
+      </header>
+
+      <div class="ts-stage">
+        <button class="ts-arrow ts-arrow-left focusable" data-action="team-prev" aria-label="Previous team">&#8249;</button>
+
+        <div class="ts-card" id="ts-card">
+          <div class="ts-crest" id="ts-crest"></div>
+          <div class="ts-name" id="ts-name">—</div>
+          <div class="ts-sub" id="ts-sub">—</div>
+          <div class="ts-ratings" id="ts-ratings"></div>
+        </div>
+
+        <button class="ts-arrow ts-arrow-right focusable" data-action="team-next" aria-label="Next team">&#8250;</button>
+      </div>
+
+      <div class="ts-dots" id="ts-dots"></div>
+
+      <nav class="ts-actions">
+        <button class="ts-confirm focusable" data-action="team-confirm" id="ts-confirm">Select</button>
+        <button class="ts-random focusable hidden" data-action="team-random" id="ts-random">Random Opponent</button>
+      </nav>
+      <p class="ts-hint">←→ change team &middot; pinch to confirm</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MATCH (canvas) + HUD                                          -->
+    <!-- ============================================================ -->
+    <div id="match" class="screen hidden">
+      <canvas id="pitch" width="600" height="600"></canvas>
+
+      <div id="hud" class="hud">
+        <!-- Scoreboard -->
+        <div class="scoreboard">
+          <div class="sb-team sb-home">
+            <span class="sb-dot" id="sb-home-dot"></span>
+            <span class="sb-code" id="sb-home-code">HOM</span>
+            <span class="sb-score" id="sb-home-score">0</span>
+          </div>
+          <div class="sb-center">
+            <div class="sb-clock" id="sb-clock">0'</div>
+            <div class="sb-half" id="sb-half">1st</div>
+          </div>
+          <div class="sb-team sb-away">
+            <span class="sb-score" id="sb-away-score">0</span>
+            <span class="sb-code" id="sb-away-code">AWY</span>
+            <span class="sb-dot" id="sb-away-dot"></span>
+          </div>
+        </div>
+        <div class="possession">
+          <div class="possession-fill" id="possession-fill"></div>
+        </div>
+
+        <!-- Big centered event banner (GOAL!, etc.) -->
+        <div class="match-banner" id="match-banner"></div>
+
+        <!-- live commentary line -->
+        <div class="commentary" id="commentary"></div>
+
+        <!-- Bottom: context action chip + dash readiness -->
+        <div class="action-row">
+          <div class="dash-pip" id="dash-pip" aria-label="Dash">⚡</div>
+          <div class="action-chip" id="action-chip">
+            <span class="action-ic" id="action-ic">▸</span>
+            <span class="action-tx" id="action-tx">PASS</span>
+          </div>
+        </div>
+
+        <!-- transient toast (Corner, Throw-in, etc.) -->
+        <div class="match-toast" id="match-toast"></div>
+      </div>
+
+      <!-- Touch / click controls — synthetic key dispatch (phone play + preview testing) -->
+      <div id="touch-controls" class="touch-controls hidden">
+        <div class="touch-dpad">
+          <button class="touch-btn touch-up" data-touch-key="ArrowUp" aria-label="Up">▲</button>
+          <button class="touch-btn touch-left" data-touch-key="ArrowLeft" aria-label="Left">◀</button>
+          <button class="touch-btn touch-right" data-touch-key="ArrowRight" aria-label="Right">▶</button>
+          <button class="touch-btn touch-down" data-touch-key="ArrowDown" aria-label="Down">▼</button>
+        </div>
+        <button class="touch-btn touch-pinch" data-touch-key="Enter" aria-label="Pinch / action">●</button>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PAUSE                                                         -->
+    <!-- ============================================================ -->
+    <div id="pause" class="screen hidden">
+      <div class="overlay-frame">
+        <h1 class="overlay-title">Paused</h1>
+        <p class="overlay-sub" id="pause-score">—</p>
+        <nav class="overlay-menu">
+          <button class="title-btn focusable" data-action="resume">Resume</button>
+          <button class="title-btn focusable" data-action="restart-match">Restart Match</button>
+          <button class="title-btn focusable" data-action="toggle-sound" id="sound-toggle-btn">Sound: ON</button>
+          <button class="title-btn focusable" data-action="menu-touch-toggle" id="touch-toggle-btn">Touch Controls: OFF</button>
+          <button class="title-btn focusable danger" data-action="quit-title">Quit to Title</button>
+        </nav>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- HALF TIME                                                     -->
+    <!-- ============================================================ -->
+    <div id="halftime" class="screen hidden">
+      <div class="overlay-frame">
+        <h1 class="overlay-title">Half Time</h1>
+        <p class="overlay-sub" id="ht-score">—</p>
+        <div class="stat-grid" id="ht-stats"></div>
+        <nav class="overlay-menu">
+          <button class="title-btn focusable" data-action="resume-second">Play Second Half</button>
+        </nav>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- FULL TIME / RESULT                                            -->
+    <!-- ============================================================ -->
+    <div id="result" class="screen hidden">
+      <div class="overlay-frame">
+        <h1 class="overlay-title" id="result-title">Full Time</h1>
+        <p class="overlay-sub result-score" id="result-score">—</p>
+        <div class="stat-grid" id="result-stats"></div>
+        <nav class="overlay-menu">
+          <button class="title-btn focusable" data-action="rematch">Rematch</button>
+          <button class="title-btn focusable" data-action="choose-teams">Change Teams</button>
+          <button class="title-btn focusable" data-action="quit-title">Title</button>
+        </nav>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CUP (single-elimination tournament)                          -->
+    <!-- ============================================================ -->
+    <div id="cup" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1 id="cup-title">Cup</h1>
+        <span class="header-meta" id="cup-round">Quarter-finals</span>
+      </header>
+      <div class="content">
+        <div class="cup-bracket" id="cup-bracket"></div>
+        <p class="cup-status" id="cup-status"></p>
+      </div>
+      <nav class="cup-actions">
+        <button class="ts-confirm focusable" data-action="cup-play" id="cup-play">Play Your Match</button>
+        <button class="title-btn focusable" data-action="cup-new" id="cup-new">New Cup</button>
+      </nav>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PENALTY SHOOTOUT                                              -->
+    <!-- ============================================================ -->
+    <div id="shootout" class="screen hidden">
+      <canvas id="pen-canvas" width="600" height="600"></canvas>
+      <div class="hud">
+        <div class="pen-top" id="pen-top">Penalty Shootout</div>
+        <div class="commentary" id="pen-instr" style="bottom:96px;"></div>
+        <div class="action-row">
+          <div class="action-chip" id="pen-chip"><span class="action-ic">◎</span><span class="action-tx" id="pen-chip-tx">SHOOT</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- HOW TO PLAY                                                   -->
+    <!-- ============================================================ -->
+    <div id="how" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>How to Play</h1>
+      </header>
+      <div class="content how-body">
+        <div class="how-card focusable" tabindex="0">
+          <h2>Move</h2>
+          <div class="how-row"><span class="kbd">← ↑ → ↓</span><span>Swipe to steer the highlighted player. They keep running that way, so you only steer.</span></div>
+        </div>
+        <div class="how-card focusable" tabindex="0">
+          <h2>Pinch (tap)</h2>
+          <div class="how-row"><span class="kbd">pinch</span><span>One button, context aware. The chip at the bottom always shows what it will do:</span></div>
+          <ul class="how-list">
+            <li><b class="c-grn">PASS</b> — slides the ball to the best teammate ahead of you.</li>
+            <li><b class="c-cyn">SHOOT</b> — when you reach shooting range, pinch shoots at goal. Steer first to aim the corner.</li>
+            <li><b class="c-red">TACKLE</b> — when defending and near the ball, pinch to win it back.</li>
+          </ul>
+        </div>
+        <div class="how-card focusable" tabindex="0">
+          <h2>The rest is automatic</h2>
+          <p>You always control the player nearest the action — control switches for you. Teammates make runs, mark up, and your keeper saves on its own.</p>
+        </div>
+        <div class="how-card focusable" tabindex="0">
+          <h2>Pause</h2>
+          <div class="how-row"><span class="kbd">↑↓↑↓</span><span>Swipe up-down-up-down to pause (or Esc on desktop).</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SETTINGS                                                      -->
+    <!-- ============================================================ -->
+    <div id="settings" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>Settings</h1>
+      </header>
+      <div class="content">
+        <button class="opt-row focusable" data-action="cycle-difficulty">
+          <span class="opt-label">Difficulty</span>
+          <span class="opt-value" id="opt-difficulty">Normal</span>
+        </button>
+        <button class="opt-row focusable" data-action="cycle-length">
+          <span class="opt-label">Half Length</span>
+          <span class="opt-value" id="opt-length">Normal</span>
+        </button>
+        <button class="opt-row focusable" data-action="cycle-formation">
+          <span class="opt-label">Formation</span>
+          <span class="opt-value" id="opt-formation">4-3-3</span>
+        </button>
+        <button class="opt-row focusable" data-action="toggle-sound">
+          <span class="opt-label">Sound</span>
+          <span class="opt-value" id="opt-sound">ON</span>
+        </button>
+        <button class="opt-row focusable" data-action="menu-touch-toggle">
+          <span class="opt-label">Touch Controls</span>
+          <span class="opt-value" id="opt-touch">OFF</span>
+        </button>
+        <button class="opt-row focusable danger" data-action="reset-record">
+          <span class="opt-label">Reset Record</span>
+          <span class="opt-value" id="opt-record">0-0-0</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

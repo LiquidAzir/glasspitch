@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: glasspitch
+    runtime: static
+    rootDir: .
+    buildCommand: ""
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=0, must-revalidate
+      - path: /favicon.png
+        name: Cache-Control
+        value: public, max-age=86400

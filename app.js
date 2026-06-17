@@ -19,7 +19,7 @@
   const CFG = {
     // Pitch (meters)
     PW: 68, PL: 105,
-    goalHalfW: 3.66, goalDepth: 2.4,
+    goalHalfW: 3.66, goalDepth: 1.7,
     boxW: 40.3, boxD: 16.5, sixW: 18.32, sixD: 5.5,
     penSpot: 11, centerR: 9.15,
     // Physics (m, s)
@@ -810,21 +810,23 @@
     let ny = clamp(form[p.idx].ny + push + (ballNy - 0.5) * 0.5, 0.05, 0.95);
     let ty = attackUp ? CFG.PL * (1 - ny) : CFG.PL * ny;
 
-    // pressing: the closest 1-2 defenders go to the ball
+    // pressing: only the NEAREST defender pressures the ball; the 2nd contains the lane.
+    // Keeps the carrier challenged without the whole team collapsing on them.
     let dx, dy, sprint = 1;
-    const myTimeToBall = timeToBall(p);
     const closest = teamPressRank(p);
-    const shouldPress = !weHaveBall && (closest === 0 || (closest === 1 && dist(p, b) < 22));
+    const gy = attackUp ? CFG.PL : 0;
     if (b.owner == null) {
       // loose ball: nearest of each side chases
       if (closest === 0) { dx = b.x + b.vx*0.2 - p.x; dy = b.y + b.vy*0.2 - p.y; sprint = 1.06; }
       else { dx = tx - p.x; dy = ty - p.y; }
-    } else if (shouldPress) {
-      const ox = owner ? owner.x : b.x, oy = owner ? owner.y : b.y;
-      // approach goal-side of the carrier
-      const gy = attackUp ? CFG.PL : 0;
-      const bias = 0.0;
-      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.2) - p.y; sprint = 1.05;
+    } else if (!weHaveBall && closest === 0) {
+      // primary presser — approach goal-side but hold a small standoff so you can still move
+      const ox = owner.x, oy = owner.y;
+      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 2.2) - p.y; sprint = 1.0;
+    } else if (!weHaveBall && closest === 1 && dist(p, b) < 28) {
+      // second man — CONTAIN: sit ~5m goal-side, cut the forward lane, don't swarm
+      const ox = owner.x, oy = owner.y;
+      dx = (ox * 0.45 + tx * 0.55) - p.x; dy = (oy + Math.sign(gy - oy) * 5.0) - p.y; sprint = 0.95;
     } else if (weHaveBall && p.role === 'FWD' && srandHash(p.idx, b) ) {
       // make a forward run into space ahead of the ball (toward the attacking goal)
       dx = tx - p.x; dy = (ty + (attackUp ? -4 : 4)) - p.y;
@@ -832,14 +834,14 @@
       dx = tx - p.x; dy = ty - p.y;
     }
 
-    // separation from nearby teammates
+    // separation from nearby teammates (wider + stronger → defenders spread out, less clumping)
     let sx = 0, sy = 0;
     for (const q of team.players) {
       if (q === p || q.isGK) continue;
       const d2 = dist2(p.x, p.y, q.x, q.y);
-      if (d2 < 16 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (4 - d); sy += (p.y - q.y)/d * (4 - d); }
+      if (d2 < 30 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (5.5 - d); sy += (p.y - q.y)/d * (5.5 - d); }
     }
-    dx += sx * 0.5; dy += sy * 0.5;
+    dx += sx * 0.7; dy += sy * 0.7;
 
     const n = len(dx, dy);
     if (n < 0.3) return { x: 0, y: 0, sprint: 0.0 };
@@ -1556,7 +1558,7 @@
   }
   function setupPitchGeom() {
     const W = 600, H = 600;
-    const top = 16, bot = 18;
+    const top = 60, bot = 58;   // reserve room so the scoreboard / action chip never cover the goals + nets
     const availH = H - top - bot;
     const ratio = CFG.PW / CFG.PL;
     let ph = availH, pw = ph * ratio;
@@ -1737,9 +1739,11 @@
     const sx = wx(p.x), sy = wy(p.y);
     const t = teamObj(p.side).def;
     const col = p.isGK ? t.gk : t.col;
-    const r = (p.isGK ? 3.2 : 3.0) * 1.0;          // world meters → body radius
-    const bodyR = Math.max(6, r * s * 0.5 + 4);
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
+    const hasBall = game.ball.owner === p.id;
+    const r = p.isGK ? 3.3 : 3.0;
+    let bodyR = Math.max(8, r * s * 0.55 + 5);
+    if (isActive) bodyR *= 1.12;                     // the player you control is drawn a touch larger
 
     // dash trail
     if (isActive && p.dashT > 0) {
@@ -1751,59 +1755,59 @@
     }
 
     // shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.40)';
-    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*0.95, bodyR*0.42, 0, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*0.95, bodyR*0.42, 0, 0, 6.2832); ctx.fill();
 
-    // active ring (glow) under feet
-    if (isActive) {
+    // possession / active ring (glow) — instantly shows who has the ball and who you control
+    if (isActive || hasBall) {
       ctx.save();
-      ctx.strokeStyle = '#58d6ff'; ctx.lineWidth = 2.2;
-      ctx.shadowColor = '#58d6ff'; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.5, bodyR*1.15, bodyR*0.62, 0, 0, 6.2832); ctx.stroke();
+      const ringC = isActive ? '#58d6ff' : (p.side === 'home' ? '#3ef08f' : '#ff8a3a');
+      ctx.strokeStyle = ringC; ctx.lineWidth = isActive ? 3 : 2.6;
+      ctx.shadowColor = ringC; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.25, bodyR*0.66, 0, 0, 6.2832); ctx.stroke();
       ctx.restore();
     }
 
-    // running legs (two short strokes alternating)
+    // running legs
     const swing = Math.sin(p.runPhase) * (len(p.vx,p.vy) > 0.5 ? bodyR*0.5 : 0);
-    ctx.strokeStyle = shade(col, -0.45); ctx.lineWidth = Math.max(2, bodyR*0.30);
+    ctx.strokeStyle = shade(col, -0.5); ctx.lineWidth = Math.max(2.5, bodyR*0.30); ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(sx - bodyR*0.28, sy + bodyR*0.2); ctx.lineTo(sx - bodyR*0.28, sy + bodyR*0.7 + swing);
-    ctx.moveTo(sx + bodyR*0.28, sy + bodyR*0.2); ctx.lineTo(sx + bodyR*0.28, sy + bodyR*0.7 - swing);
-    ctx.stroke();
+    ctx.moveTo(sx - bodyR*0.3, sy + bodyR*0.25); ctx.lineTo(sx - bodyR*0.3, sy + bodyR*0.85 + swing);
+    ctx.moveTo(sx + bodyR*0.3, sy + bodyR*0.25); ctx.lineTo(sx + bodyR*0.3, sy + bodyR*0.85 - swing);
+    ctx.stroke(); ctx.lineCap = 'butt';
 
-    // torso (kit) — slight oval, gradient for sheen
+    // torso (kit) with sheen + a bright rim so it reads on the see-through display
     const grad = ctx.createLinearGradient(sx, sy - bodyR, sx, sy + bodyR);
-    grad.addColorStop(0, shade(col, 0.12)); grad.addColorStop(1, shade(col, -0.18));
+    grad.addColorStop(0, shade(col, 0.2)); grad.addColorStop(1, shade(col, -0.2));
     ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.ellipse(sx, sy, bodyR*0.78, bodyR*0.92, 0, 0, 6.2832); ctx.fill();
-    ctx.lineWidth = 1.4; ctx.strokeStyle = shade(col, -0.4); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(sx, sy, bodyR*0.82, bodyR*0.96, 0, 0, 6.2832); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = shade(col, 0.4); ctx.stroke();
 
-    // shorts (secondary kit colour) for a two-tone look
+    // shorts (secondary kit colour)
     ctx.fillStyle = t.col2;
-    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.52, bodyR*0.58, bodyR*0.32, 0, 0, 6.2832); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*0.6, bodyR*0.34, 0, 0, 6.2832); ctx.fill();
     // captain's armband
-    if (p.captain) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(sx - bodyR*0.62, sy - bodyR*0.2, bodyR*0.22, bodyR*0.34); }
+    if (p.captain) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(sx - bodyR*0.66, sy - bodyR*0.22, bodyR*0.24, bodyR*0.36); }
 
     // head (leads in facing direction)
-    const hx = sx + Math.cos(p.heading) * bodyR*0.55;
-    const hy = sy + Math.sin(p.heading) * bodyR*0.55 - bodyR*0.15;
-    ctx.fillStyle = '#e9c39b';
-    ctx.beginPath(); ctx.arc(hx, hy, bodyR*0.42, 0, 6.2832); ctx.fill();
+    const hx = sx + Math.cos(p.heading) * bodyR*0.5;
+    const hy = sy + Math.sin(p.heading) * bodyR*0.5 - bodyR*0.18;
+    ctx.fillStyle = '#f0c79e';
+    ctx.beginPath(); ctx.arc(hx, hy, bodyR*0.44, 0, 6.2832); ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.stroke();
 
     // number
-    if (bodyR >= 8) {
-      ctx.fillStyle = pickInk(col); ctx.font = `700 ${Math.round(bodyR*0.8)}px -apple-system, system-ui, sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(String(p.num), sx, sy + 0.5);
-    }
+    ctx.fillStyle = pickInk(col); ctx.font = `800 ${Math.round(bodyR*0.85)}px -apple-system, system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(p.num), sx, sy + bodyR*0.04);
 
     // active facing chevron
     if (isActive) {
-      const cx = sx + Math.cos(p.heading) * bodyR*1.9;
-      const cy = sy + Math.sin(p.heading) * bodyR*1.9;
+      const cx = sx + Math.cos(p.heading) * bodyR*1.95;
+      const cy = sy + Math.sin(p.heading) * bodyR*1.95;
       ctx.save(); ctx.translate(cx, cy); ctx.rotate(p.heading);
-      ctx.fillStyle = '#58d6ff';
-      ctx.beginPath(); ctx.moveTo(5,0); ctx.lineTo(-3,-4); ctx.lineTo(-3,4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#58d6ff'; ctx.shadowColor = '#58d6ff'; ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(-4,-5); ctx.lineTo(-4,5); ctx.closePath(); ctx.fill();
       ctx.restore();
     }
   }
@@ -1821,19 +1825,23 @@
     }
     const sx = wx(b.x), sy = wy(b.y);
     const zPix = z * geom.s * 2.2;               // exaggerated so the arc reads on a small pitch
-    const R = Math.max(3, geom.s * 0.55) * (1 + z * 0.08);
+    const R = Math.max(7, geom.s * 1.05) * (1 + z * 0.09);   // big & bright so it's easy to track
     // ground shadow (shrinks & fades as the ball rises)
     const sh = clamp(1 - z * 0.14, 0.3, 1);
-    ctx.fillStyle = `rgba(0,0,0,${0.42 * sh})`;
-    ctx.beginPath(); ctx.ellipse(sx, sy + R*0.6, R*1.1*sh, R*0.5*sh, 0, 0, 6.2832); ctx.fill();
-    // lifted ball
+    ctx.fillStyle = `rgba(0,0,0,${0.45 * sh})`;
+    ctx.beginPath(); ctx.ellipse(sx, sy + R*0.5, R*0.95*sh, R*0.42*sh, 0, 0, 6.2832); ctx.fill();
+    // lifted ball with a soft glow halo so you never lose it
     const by = sy - zPix;
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,255,255,0.9)'; ctx.shadowBlur = 13;
     const g = ctx.createRadialGradient(sx - R*0.3, by - R*0.3, R*0.2, sx, by, R);
-    g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#9fb4a8');
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.72, '#eef5f0'); g.addColorStop(1, '#b3c6bb');
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(sx, by, R, 0, 6.2832); ctx.fill();
-    ctx.fillStyle = 'rgba(20,30,24,0.9)';
-    ctx.beginPath(); ctx.arc(sx, by, R*0.34, 0, 6.2832); ctx.fill();
+    ctx.restore();
+    // pentagon hint
+    ctx.fillStyle = 'rgba(22,32,26,0.85)';
+    ctx.beginPath(); ctx.arc(sx, by, R*0.3, 0, 6.2832); ctx.fill();
   }
 
   function drawFx() {

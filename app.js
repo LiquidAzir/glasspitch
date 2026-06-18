@@ -2162,6 +2162,34 @@
     drawPlayers();
     drawBall();
     drawFx();
+    drawBallMarker();
+  }
+
+  // a floating marker that hovers over whoever has the ball — drawn last so it's
+  // always visible on top. Colour says which team: cyan = you, green = teammate, orange = opponent.
+  function drawBallMarker() {
+    const c = playerById(game.ball.owner);
+    if (!c) return;
+    const s = geom.s;
+    const isActive = c.id === game.activeId && c.side === 'home' && !game._allAI;
+    let bodyR = Math.max(6.5, (c.isGK ? 3.3 : 3.0) * s * 0.46 + 3.5);
+    if (isActive) bodyR *= 1.2;
+    const sx = wx(c.x), sy = wy(c.y);
+    const col = isActive ? '#58d6ff' : (c.side === 'home' ? '#3ef08f' : '#ff6a3d');
+    const bob = Math.sin(performance.now() / 170) * 2.2;
+    let tipY = sy - bodyR * 1.7 + bob;
+    if (tipY < 46) tipY = 46;                 // keep on-screen near the top goal
+    ctx.save();
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 9;
+    const w = 8, h = 12;
+    ctx.beginPath();
+    ctx.moveTo(sx, tipY);                      // tip points down at the player
+    ctx.lineTo(sx - w, tipY - h);
+    ctx.lineTo(sx + w, tipY - h);
+    ctx.closePath(); ctx.fill();
+    // thin dark edge for contrast against bright kits
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 0; ctx.stroke();
+    ctx.restore();
   }
 
   function drawNetRipples() {
@@ -2250,12 +2278,17 @@
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
     ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*0.95, bodyR*0.42, 0, 0, 6.2832); ctx.fill();
 
-    // possession / active ring (glow) — instantly shows who has the ball and who you control
+    // possession / active ring — the carrier gets a filled glow disc (stronger), so it's
+    // obvious who has the ball vs. who you merely control.
     if (isActive || hasBall) {
       ctx.save();
-      const ringC = isActive ? '#58d6ff' : (p.side === 'home' ? '#3ef08f' : '#ff8a3a');
-      ctx.strokeStyle = ringC; ctx.lineWidth = isActive ? 3 : 2.6;
-      ctx.shadowColor = ringC; ctx.shadowBlur = 12;
+      const ringC = hasBall ? (isActive ? '#58d6ff' : (p.side === 'home' ? '#3ef08f' : '#ff7a45')) : '#58d6ff';
+      if (hasBall) {
+        ctx.fillStyle = hexA(ringC, 0.2);
+        ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.32, bodyR*0.72, 0, 0, 6.2832); ctx.fill();
+      }
+      ctx.strokeStyle = ringC; ctx.lineWidth = hasBall ? 3.2 : 2.2;
+      ctx.shadowColor = ringC; ctx.shadowBlur = hasBall ? 14 : 9;
       ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.25, bodyR*0.66, 0, 0, 6.2832); ctx.stroke();
       ctx.restore();
     }

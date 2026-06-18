@@ -677,6 +677,7 @@
 
     chooseActive(dt);
     for (const p of allPlayers()) updatePlayer(p, dt);
+    tickDispossess(dt);
     updateBall(dt);
     updateKeepers(dt);
     checkBounds();
@@ -820,9 +821,9 @@
       if (closest === 0) { dx = b.x + b.vx*0.2 - p.x; dy = b.y + b.vy*0.2 - p.y; sprint = 1.06; }
       else { dx = tx - p.x; dy = ty - p.y; }
     } else if (!weHaveBall && closest === 0) {
-      // primary presser — approach goal-side but hold a small standoff so you can still move
+      // primary presser — close in goal-side and actually challenge for the ball
       const ox = owner.x, oy = owner.y;
-      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 2.2) - p.y; sprint = 1.0;
+      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y; sprint = 1.02;
     } else if (!weHaveBall && closest === 1 && dist(p, b) < 28) {
       // second man — CONTAIN: sit ~5m goal-side, cut the forward lane, don't swarm
       const ox = owner.x, oy = owner.y;
@@ -941,10 +942,33 @@
     if (p.side === 'away') {} // away: control follows ball naturally
   }
 
+  // pass to the best teammate in the direction the player is FACING/steering
+  function directionalPassTarget(p, ax, ay) {
+    const an = len(ax, ay) || 1; ax /= an; ay /= an;
+    const mates = teamObj(p.side).players;
+    let best = null, bs = -1e9;
+    for (const m of mates) {
+      if (m === p || m.isGK) continue;
+      const dx = m.x - p.x, dy = m.y - p.y, d = len(dx, dy);
+      if (d < 3 || d > 55) continue;
+      const align = (dx/d) * ax + (dy/d) * ay;          // -1..1: in the facing direction?
+      const open = clamp(nearestOppToPoint(m, p.side) / 8, 0, 1);
+      const lane = laneClear(p, m) ? 1 : 0.4;
+      const distPen = d > 38 ? (d - 38) / 40 : 0;
+      const score = align * 1.5 + open * 0.35 + lane * 0.35 - distPen - (d < 6 ? 0.25 : 0);
+      if (score > bs) { bs = score; best = m; }
+    }
+    return best;
+  }
+  // aim direction = your active steer if you're steering, else the way you're facing
+  function homePassTarget(p) {
+    let ax = game.steer.x, ay = game.steer.y;
+    if (!ax && !ay) { ax = Math.cos(p.heading); ay = Math.sin(p.heading); }
+    return directionalPassTarget(p, ax, ay);
+  }
   function doPass(p) {
-    const best = bestPassTarget(p) || { mate: pickForwardMate(p) };
-    const mate = best.mate; if (!mate) { doShoot(p); return; }
-    // bias toward the teammate most aligned with the player's steer
+    const mate = homePassTarget(p) || pickForwardMate(p);
+    if (!mate) { doShoot(p); return; }
     const lead = 0.30;
     const tx = mate.x + mate.vx * lead, ty = mate.y + mate.vy * lead;
     kickTo(p, tx, ty, false, 0.97);
@@ -1024,6 +1048,42 @@
       b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; game.lastTouch = p.side; game.lastTouchPlayer = p.id;
       if (p.side==='home') setActive(p.id, true);
     }
+  }
+
+  // A close defender wins the ball off the carrier over a moment of pressure
+  // (applies to you AND the AI — so you can no longer just hold it forever).
+  function tickDispossess(dt) {
+    const b = game.ball;
+    const carrier = playerById(b.owner);
+    if (!carrier || carrier.isGK) return;
+    let presser = null, pd = 1e9;
+    for (const o of teamObj(otherSide(carrier.side)).players) {
+      if (o.isGK || o.tackleCd > 0) continue;
+      const d = dist(o, carrier);
+      if (d < pd) { pd = d; presser = o; }
+    }
+    if (!presser || pd > CFG.tackleR) return;
+    const diff = DIFFS[game.settings.difficulty];
+    const defR = teamObj(presser.side).def.r.DEF / 100;
+    const carR = teamObj(carrier.side).def.r.MID / 100;
+    let rate = (0.4 + (defR - 0.6) * 2.0) * (1 - pd / CFG.tackleR);   // ramps up the closer they get
+    rate *= clamp(1.15 - (carR - 0.6), 0.6, 1.35);                   // skilled carriers shield better
+    if (carrier.dashT > 0) rate *= 0.4;                              // a dash buys a moment
+    rate *= (carrier.side === 'home') ? diff.tackle : (2 - diff.tackle);  // difficulty scales the human's opponent
+    if (srand() < rate * dt) knockLoose(carrier, presser);
+  }
+  function knockLoose(carrier, presser) {
+    const b = game.ball;
+    const dx = presser.x - carrier.x, dy = presser.y - carrier.y, n = len(dx, dy) || 1;
+    b.owner = null; b.shot = false; b.z = 0; b.vz = 0;
+    const sp = rrange(3.5, 6.5);
+    b.vx = dx/n * sp + rrange(-2, 2); b.vy = dy/n * sp + rrange(-2, 2);
+    game.lastTouch = presser.side; game.lastTouchPlayer = presser.id;
+    game.lastKicker = carrier.id; carrier.kickCd = 0.4;   // carrier can't instantly re-grab the loose ball
+    presser.tackleCd = 0.5;
+    spawnEffect('tackle', carrier.x, carrier.y); SFX.tackle();
+    if (carrier.side === 'home') say(pick(['Dispossessed!', 'Robbed of it!', 'Lost the ball!']));
+    else if (presser.side === 'home') say(pick(['Won it back!', 'Great challenge!', 'Nicked the ball!']));
   }
 
   // ============================================================
@@ -1709,11 +1769,10 @@
         ctx.beginPath(); ctx.arc(wx(tx), wy(0), 7, 0, 6.2832); ctx.stroke();
         ctx.restore();
       } else {
-        const best = bestPassTarget(p);
-        if (best) {
-          const m = best.mate;
+        const m = homePassTarget(p);          // preview matches the facing-aware pass
+        if (m) {
           ctx.save();
-          ctx.strokeStyle = 'rgba(62,240,143,0.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([4,5]);
+          ctx.strokeStyle = 'rgba(62,240,143,0.6)'; ctx.lineWidth = 1.6; ctx.setLineDash([4,5]);
           ctx.beginPath(); ctx.moveTo(wx(p.x), wy(p.y)); ctx.lineTo(wx(m.x), wy(m.y)); ctx.stroke();
           ctx.setLineDash([]);
           // chevron on receiver

@@ -17,8 +17,9 @@
   // CONFIG
   // ============================================================
   const CFG = {
-    // Pitch (meters)
-    PW: 68, PL: 105,
+    // Pitch (meters) — wider than a real pitch so the 22 players spread across
+    // more of the screen (less crowded) instead of a narrow central column.
+    PW: 88, PL: 105,
     goalHalfW: 3.66, goalDepth: 1.7,
     boxW: 40.3, boxD: 16.5, sixW: 18.32, sixD: 5.5,
     penSpot: 11, centerR: 9.15,
@@ -840,9 +841,9 @@
     for (const q of team.players) {
       if (q === p || q.isGK) continue;
       const d2 = dist2(p.x, p.y, q.x, q.y);
-      if (d2 < 30 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (5.5 - d); sy += (p.y - q.y)/d * (5.5 - d); }
+      if (d2 < 38 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (6.2 - d); sy += (p.y - q.y)/d * (6.2 - d); }
     }
-    dx += sx * 0.7; dy += sy * 0.7;
+    dx += sx * 0.85; dy += sy * 0.85;
 
     const n = len(dx, dy);
     if (n < 0.3) return { x: 0, y: 0, sprint: 0.0 };
@@ -1801,8 +1802,8 @@
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
     const hasBall = game.ball.owner === p.id;
     const r = p.isGK ? 3.3 : 3.0;
-    let bodyR = Math.max(8, r * s * 0.55 + 5);
-    if (isActive) bodyR *= 1.12;                     // the player you control is drawn a touch larger
+    let bodyR = Math.max(7, r * s * 0.5 + 4);
+    if (isActive) bodyR *= 1.14;                     // the player you control is drawn a touch larger
 
     // dash trail
     if (isActive && p.dashT > 0) {

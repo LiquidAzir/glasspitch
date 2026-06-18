@@ -30,6 +30,7 @@
         <p class="title-tagline">Holographic soccer for Meta Ray-Ban Display</p>
         <nav class="title-menu">
           <button class="title-btn focusable" data-action="quick-match">Kick Off</button>
+          <button class="title-btn focusable" data-action="goto-career">Career</button>
           <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
           <button class="title-btn focusable" data-action="choose-teams">Choose Teams</button>
           <button class="title-btn focusable" data-action="goto-how">How to Play</button>
@@ -117,6 +118,9 @@
 
         <!-- transient toast (Corner, Throw-in, etc.) -->
         <div class="match-toast" id="match-toast"></div>
+
+        <!-- guided tutorial prompt -->
+        <div class="tutorial-prompt hidden" id="tutorial-prompt"></div>
       </div>
 
       <!-- Touch / click controls — synthetic key dispatch (phone play + preview testing) -->
@@ -176,6 +180,28 @@
           <button class="title-btn focusable" data-action="quit-title">Title</button>
         </nav>
       </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CAREER (multi-season manager mode)                           -->
+    <!-- ============================================================ -->
+    <div id="career" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1 id="career-title">Career</h1>
+        <span class="header-meta" id="career-meta">Season 1</span>
+      </header>
+      <div class="career-tabs">
+        <button class="cr-tab focusable on" data-action="career-tab-table">Table</button>
+        <button class="cr-tab focusable" data-action="career-tab-scorers">Scorers</button>
+        <button class="cr-tab focusable" data-action="career-tab-history">Cabinet</button>
+      </div>
+      <div class="content" id="career-content"></div>
+      <p class="cup-status" id="career-status"></p>
+      <nav class="cup-actions">
+        <button class="ts-confirm focusable" data-action="career-play" id="career-play">Play Match</button>
+        <button class="title-btn focusable" data-action="career-new" id="career-new">New Career</button>
+      </nav>
     </div>
 
     <!-- ============================================================ -->
@@ -265,6 +291,7 @@
         <h1>How to Play</h1>
       </header>
       <div class="content how-body">
+        <button class="tut-cta focusable" data-action="start-tutorial">▶&nbsp; Play the Interactive Tutorial</button>
         <div class="how-card focusable" tabindex="0">
           <h2>Move</h2>
           <div class="how-row"><span class="kbd">← ↑ → ↓</span><span>Swipe to steer the highlighted player. They keep running that way, so you only steer.</span></div>

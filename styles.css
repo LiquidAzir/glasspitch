@@ -135,17 +135,17 @@ html, body {
   background: linear-gradient(90deg, transparent, var(--grn), transparent);
 }
 .title-tagline {
-  z-index: 2; color: var(--ink-2); font-size: 15px; margin-bottom: 24px;
+  z-index: 2; color: var(--ink-2); font-size: 15px; margin-bottom: 16px;
 }
 .title-menu {
-  z-index: 2; display: flex; flex-direction: column; gap: 12px; width: 320px;
+  z-index: 2; display: flex; flex-direction: column; gap: 9px; width: 320px;
 }
 .title-btn {
-  height: 56px; border-radius: 14px;
+  height: 49px; border-radius: 13px;
   background: var(--surface-2);
   border: 1.5px solid var(--line);
   color: var(--ink);
-  font-size: 19px; font-weight: 700; letter-spacing: 0.5px;
+  font-size: 18px; font-weight: 700; letter-spacing: 0.5px;
   cursor: pointer;
 }
 .title-btn:focus { background: #16291f; transform: scale(1.03); }
@@ -300,6 +300,25 @@ html, body {
 }
 .match-toast.show { opacity: 1; }
 
+/* guided tutorial prompt */
+.tutorial-prompt {
+  position: absolute; top: 84px; left: 50%; transform: translateX(-50%);
+  width: 430px; max-width: 92%; text-align: center;
+  background: rgba(8, 16, 12, 0.9); border: 1.5px solid var(--cyn);
+  border-radius: 16px; padding: 14px 18px;
+  font-size: 16px; font-weight: 600; color: var(--ink); line-height: 1.45;
+  box-shadow: 0 0 22px rgba(88,214,255,0.35);
+}
+.tutorial-prompt .tut-step { display: block; font-size: 12px; font-weight: 800; letter-spacing: 1px; color: var(--cyn); margin-bottom: 6px; }
+.tutorial-prompt .tut-skip { display: block; font-size: 11px; color: var(--ink-3); margin-top: 8px; font-weight: 600; }
+
+.tut-cta {
+  height: 60px; border-radius: 14px; cursor: pointer;
+  background: var(--grn); color: #06120b; border: none;
+  font-size: 18px; font-weight: 800; letter-spacing: 0.5px;
+}
+.tut-cta:focus { transform: scale(1.02); box-shadow: 0 0 20px rgba(62,240,143,0.55); }
+
 /* live commentary line */
 .commentary {
   position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
@@ -441,6 +460,29 @@ html, body {
 .lg-row.you-row { background: rgba(88,214,255,0.14); }
 .lg-row.you-row .lg-team { color: var(--cyn); }
 .lg-champ { background: rgba(255,210,63,0.16); }
+
+/* career */
+.career-tabs { display: flex; gap: 8px; padding: 2px 8px 8px; flex: none; }
+.cr-tab { flex: 1; height: 38px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink-2); font-size: 14px; font-weight: 700; cursor: pointer; }
+.cr-tab.on { background: var(--surface-2); color: var(--ink); border-color: var(--cyn); box-shadow: 0 0 10px rgba(88,214,255,0.25); }
+.cr-tab:focus { transform: scale(1.03); }
+.cr-boot-head, .cr-hist-head { font-size: 13px; font-weight: 800; color: var(--gold); letter-spacing: 0.5px; padding: 8px 6px 4px; }
+.cr-boot-row { display: grid; grid-template-columns: 26px 1fr auto 30px; align-items: center; gap: 8px; padding: 7px 8px; font-size: 14px; font-weight: 700; border-radius: 7px; }
+.cr-boot-row.you-row { background: rgba(88,214,255,0.14); }
+.cr-rank { color: var(--ink-3); text-align: center; }
+.cr-name { color: var(--ink); }
+.cr-club { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; }
+.cr-goals { color: var(--gold); font-weight: 900; text-align: right; }
+.cr-empty { color: var(--ink-3); text-align: center; padding: 24px 12px; font-size: 14px; }
+.cr-cabinet { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 6px; }
+.cr-trophy { font-size: 36px; }
+.cr-trophy-n { font-size: 18px; font-weight: 800; }
+.cr-trophy-sub { font-size: 13px; color: var(--ink-2); }
+.cr-hist-row { display: grid; grid-template-columns: 34px 1fr auto auto; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; font-weight: 700; border-radius: 6px; }
+.cr-hist-s { color: var(--ink-3); }
+.cr-hist-pos.won { color: var(--gold); }
+.cr-hist-pts { color: var(--ink-2); font-size: 12px; }
+.cr-hist-champ { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; }
 
 /* shootout */
 #shootout { padding: 0; }

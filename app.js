@@ -257,6 +257,7 @@
     else if (id === 'result') renderResult();
     else if (id === 'cup') renderCup();
     else if (id === 'league') renderLeague();
+    else if (id === 'career') renderCareer();
     else if (id === 'shootout') { drawPen(); penInstr(); }
     else if (id === 'match') { game.guardUntil = performance.now() + 220; render(); updateHud(true); }
   }
@@ -273,6 +274,7 @@
       if (s.lastTeams) { game.ts.you = s.lastTeams.you; game.ts.opp = s.lastTeams.opp; }
       if (s.cup && s.cup.rounds) game.cup = s.cup;
       if (s.league && s.league.fixtures) game.league = s.league;
+      if (s.career && s.career.cur) game.career = s.career;
     } catch (e) {}
   }
   function saveStore() {
@@ -282,6 +284,7 @@
         lastTeams: { you: game.ts.you, opp: game.ts.opp },
         cup: game.cup || null,
         league: game.league || null,
+        career: game.career || null,
       }));
     } catch (e) {}
   }
@@ -308,10 +311,10 @@
   }
   function renderTeamSelect() {
     const ts = game.ts;
-    const tour = ts.mode === 'cup' || ts.mode === 'league';
-    $('ts-title').textContent = tour ? 'Pick Your Team' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : 'Select';
+    const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career';
+    $('ts-title').textContent = tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : 'Select';
     $('ts-random').classList.toggle('hidden', tour || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
@@ -336,6 +339,7 @@
     const ts = game.ts;
     if (ts.mode === 'cup') { ts.mode = null; startCup(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'league') { ts.mode = null; startLeague(TEAMS[ts.idx].id); return; }
+    if (ts.mode === 'career') { ts.mode = null; startCareer(TEAMS[ts.idx].id); return; }
     if (ts.step === 0) {
       ts.you = TEAMS[ts.idx].id;
       ts.step = 1;
@@ -509,6 +513,7 @@
       if (DIRV[key]) {
         recordCombo(key);
         if (game.screen !== 'match') { e.preventDefault(); return; } // combo opened pause
+        if (game.tutorial) game.tutorial.steerCount++;
         game.keys[key] = true; game.tapped[key] = true; e.preventDefault(); return;
       }
       if (key === 'Enter') { onPinch(); e.preventDefault(); return; }
@@ -568,7 +573,7 @@
     p.dashT = CFG.dashDur; game.dashCdUntil = now + CFG.dashCd * 1000;
     SFX.dash();
   }
-  function pauseMatch() { if (game.phase === 'ended') return; navigateTo('pause'); }
+  function pauseMatch() { if (game.tutorial) { finishTutorial(); return; } if (game.phase === 'ended') return; navigateTo('pause'); }
 
   // ============================================================
   // ACTIONS (menu dispatch)
@@ -588,7 +593,14 @@
       case 'goto-league': if (game.league) navigateTo('league'); else startNewLeagueFlow(); break;
       case 'league-play': leaguePlay(); break;
       case 'league-new': startNewLeagueFlow(); break;
+      case 'goto-career': if (game.career) navigateTo('career'); else startNewCareerFlow(); break;
+      case 'career-play': careerAdvance(); break;
+      case 'career-new': startNewCareerFlow(); break;
+      case 'career-tab-table': game.career.tab = 'table'; renderCareer(); break;
+      case 'career-tab-scorers': game.career.tab = 'scorers'; renderCareer(); break;
+      case 'career-tab-history': game.career.tab = 'history'; renderCareer(); break;
       case 'goto-how': navigateTo('how'); break;
+      case 'start-tutorial': startTutorial(); break;
       case 'goto-settings': navigateTo('settings'); break;
       case 'back': navigateBack(); break;
       case 'team-prev': tsMove(-1); break;
@@ -634,6 +646,7 @@
   // THE PINCH — context action for the active player
   // ============================================================
   function onPinch() {
+    if (game.tutorial && game.tutorial.step === TUT_STEPS.length - 1) { finishTutorial(); return; }
     if (game.phase !== 'play') return;
     const p = playerById(game.activeId); if (!p) return;
     const b = game.ball;
@@ -681,11 +694,15 @@
       return;
     }
 
-    // clock
-    const scale = HALF_SIM / LENGTHS[game.settings.length];
-    game.clockSec += dt * scale;
-    if (game.half === 1 && game.clockSec >= HALF_SIM) { game.clockSec = HALF_SIM; goHalftime(); return; }
-    if (game.half === 2 && game.clockSec >= HALF_SIM * 2) { game.clockSec = HALF_SIM * 2; goFulltime(); return; }
+    if (game.matchMode === 'tutorial') {
+      tickTutorial(dt);                            // guided steps; no clock / no half-time
+    } else {
+      // clock
+      const scale = HALF_SIM / LENGTHS[game.settings.length];
+      game.clockSec += dt * scale;
+      if (game.half === 1 && game.clockSec >= HALF_SIM) { game.clockSec = HALF_SIM; goHalftime(); return; }
+      if (game.half === 2 && game.clockSec >= HALF_SIM * 2) { game.clockSec = HALF_SIM * 2; goFulltime(); return; }
+    }
 
     // possession accounting
     const owner = playerById(game.ball.owner);
@@ -753,6 +770,8 @@
       const m = aiMove(p, dt);
       mvx = m.x; mvy = m.y; sprint = m.sprint;
     }
+    // tutorial: the tackle-target opponent stands still holding the ball (clear, easy lesson)
+    if (game.tutorial && game.tutorial.dribbleOppId === p.id) { mvx = 0; mvy = 0; }
 
     // Momentum-aware steering: rotate the velocity toward the desired direction
     // (curved turns) and ease the speed — feels fluid instead of snapping.
@@ -788,8 +807,8 @@
       const k = Math.min(1, 16 * dt);
       b.x += (tx - b.x) * k; b.y += (ty - b.y) * k;
       b.vx = p.vx; b.vy = p.vy;
-      // AI carriers decide what to do
-      if (!isActive) aiOnBall(p, dt);
+      // AI carriers decide what to do (tutorial's tackle-target opponent just holds it)
+      if (!isActive && !(game.tutorial && game.tutorial.dribbleOppId === p.id)) aiOnBall(p, dt);
     }
   }
 
@@ -876,7 +895,7 @@
     // pressing: only the NEAREST defender pressures the ball; the 2nd contains the lane.
     // Keeps the carrier challenged without the whole team collapsing on them.
     let dx, dy, sprint = 1;
-    const closest = teamPressRank(p);
+    const closest = (game.tutorial && game.tutorial.passiveOpp && p.side === 'away') ? 99 : teamPressRank(p);
     const gy = attackUp ? CFG.PL : 0;
     if (b.owner == null) {
       // loose ball: nearest of each side chases
@@ -1035,6 +1054,7 @@
     const tx = mate.x + mate.vx * lead, ty = mate.y + mate.vy * lead;
     kickTo(p, tx, ty, false, 0.97);
     setActive(mate.id, true);
+    if (game.tutorial) game.tutorial.passed = true;
   }
   function pickForwardMate(p) {
     const mates = game.home.players.filter(m => m !== p && !m.isGK);
@@ -1043,6 +1063,7 @@
   }
   function doShoot(p) {
     kickToGoal(p, p.side, game.steer.x, { shot: 0.99 });
+    if (game.tutorial) game.tutorial.shot = true;
   }
   function kickToGoal(p, side, aimX, acc) {
     game.stats.shots[side]++;
@@ -1095,7 +1116,7 @@
     const diff = DIFFS[game.settings.difficulty];
     if (carrier && carrier.side !== p.side) {
       const base = 0.45 + (teamObj(p.side).def.r.DEF/100 - 0.6) * 0.6;
-      const prob = clamp(base * (p.side === 'home' ? 1 : diff.tackle), 0.15, 0.9);
+      const prob = game.tutorial ? 1 : clamp(base * (p.side === 'home' ? 1 : diff.tackle), 0.15, 0.9);
       if (srand() < prob) {
         b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; game.lastTouch = p.side; game.lastKicker = null; game.lastTouchPlayer = p.id; game._lastWasShot = false;
         spawnEffect('win', p.x, p.y);
@@ -1314,12 +1335,22 @@
   }
 
   function scoreGoal(side) {
+    if (game.matchMode === 'tutorial') {              // celebrate but don't freeze/reset the guided flow
+      showBanner('GOAL!'); SFX.goal(); pitchPunch();
+      const b = game.ball; b.owner = null; b.vx = 0; b.vy = 0; b.z = 0; _prevBall.x = b.x; _prevBall.y = b.y;
+      return;
+    }
     teamObj(side).score++;
     game._concede = otherSide(side);
     game.phase = 'goal'; game.phaseT = CFG.goalCelebrate;
     game.netRipple[otherSide(side)] = 1.0; // the conceding net ripples
     const scorer = playerById(game.lastTouchPlayer);
     const ownGoal = scorer && scorer.side !== side;
+    if (game.matchMode === 'career' && game.career && scorer && !ownGoal) {
+      const tid = side === 'home' ? game.home.teamId : game.away.teamId;
+      const key = tid + '#' + scorer.num;
+      game.career.seasonScorers[key] = (game.career.seasonScorers[key] || 0) + 1;
+    }
     showBanner(ownGoal ? 'OWN GOAL' : 'GOAL!');
     goalCommentary(side, scorer, ownGoal);
     SFX.goal(); pitchPunch();
@@ -1380,6 +1411,7 @@
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
+    if (game.matchMode === 'career') { onCareerMatchEnd(); return; }
     const hs = game.home.score, as = game.away.score;
     if (hs > as) game.record.w++; else if (hs < as) game.record.l++; else game.record.d++;
     saveStore();
@@ -1709,8 +1741,8 @@
     navigateTo('league', { addToHistory: false }); game.history = ['title'];
     renderLeague(msg);
   }
-  function leagueTable() {
-    const lg = game.league, row = {};
+  function computeTable(lg) {
+    const row = {};
     lg.teams.forEach(id => row[id] = { id, P:0, W:0, D:0, L:0, GF:0, GA:0, GD:0, Pts:0 });
     lg.fixtures.forEach((rd, r) => rd.forEach((pair, i) => {
       const sc = lg.results[r] && lg.results[r][i]; if (!sc) return;
@@ -1725,6 +1757,7 @@
     arr.sort((x, y) => y.Pts - x.Pts || y.GD - x.GD || y.GF - x.GF || (x.id < y.id ? -1 : 1));
     return arr;
   }
+  function leagueTable() { return computeTable(game.league); }
   function renderLeague(status) {
     const lg = game.league; if (!lg) return;
     $('league-round').textContent = lg.done ? 'Season complete' : `Matchday ${lg.round + 1} / ${lg.fixtures.length}`;
@@ -1745,6 +1778,236 @@
       cp.classList.remove('hidden');
       cp.textContent = opp ? `Play Match · ${teamById(lg.you).code} v ${teamById(opp).code}` : 'Play Match';
     }
+  }
+
+  // ============================================================
+  // TUTORIAL — guided first match (steer / pass / shoot / tackle)
+  // ============================================================
+  const TUT_STEPS = [
+    'Swipe  ← ↑ → ↓  to steer your player. They run on their own — you just point them where to go.',
+    'You have the ball. Pinch (tap) to PASS it to your teammate up ahead.',
+    'Now carry it at the goal. When the chip turns to SHOOT, pinch to score!',
+    'Defend! Steer onto the opponent with the ball, then pinch to TACKLE and win it back.',
+    "That's everything — you're ready. Pinch to start playing.",
+  ];
+  function startTutorial() {
+    _seed = 0x7a17c0de;
+    const youId = game.ts.you || TEAMS[0].id;
+    game.home = makeTeam(youId, 'home', game.settings.formation);
+    game.away = makeTeam(TEAMS.find(t => t.id !== youId).id, 'away', '4-3-3');
+    game.ball = { x: CFG.PW/2, y: CFG.PL/2, z:0, vx:0, vy:0, vz:0, owner:null, shot:false, trail:[] };
+    game.clockSec = 0; game.half = 1; game.phase = 'play';
+    game.poss = { home:1, away:1 };
+    game.stats = { shots:{home:0,away:0}, sot:{home:0,away:0}, fouls:{home:0,away:0} };
+    game.effects = []; game.netRipple = { home:0, away:0 };
+    game.matchMode = 'tutorial';
+    game.tutorial = { step:0, stepT:0, steerCount:0, passiveOpp:true, passed:false, shot:false };
+    setupPitchGeom(); drawStaticPitch(); paintScoreboard();
+    resetPositions('home', true);
+    setupTutStep(0);
+    navigateTo('match', { addToHistory:false }); game.history = ['title'];
+    SFX.whistle();
+  }
+  function placeCarrier(p, x, y) {
+    const b = game.ball;
+    p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.heading = -Math.PI/2; p._velAng = -Math.PI/2;
+    b.x = x; b.y = y - 1; b.z = 0; b.vx = 0; b.vy = 0; b.owner = p.id; b.shot = false;
+    game.lastTouch = 'home'; game.lastTouchPlayer = p.id;
+  }
+  function setupTutStep(n) {
+    const tut = game.tutorial, b = game.ball;
+    tut.step = n; tut.stepT = 0; tut.steerCount = 0; tut.passed = false; tut.shot = false; tut.dribbleOppId = null;
+    game.steer.x = 0; game.steer.y = 0; game.lastSteerT = -10;
+    const mid = game.home.players[6], fwd = game.home.players[9];
+    if (n === 0) { tut.passiveOpp = true; placeCarrier(mid, CFG.PW/2, CFG.PL*0.62); setActive(mid.id, true); }
+    else if (n === 1) {
+      tut.passiveOpp = true; placeCarrier(mid, CFG.PW/2, CFG.PL*0.58);
+      fwd.x = CFG.PW*0.30; fwd.y = CFG.PL*0.34; fwd.vx = 0; fwd.vy = 0; setActive(mid.id, true);
+    }
+    else if (n === 2) { tut.passiveOpp = true; placeCarrier(fwd, CFG.PW/2, CFG.PL*0.22); setActive(fwd.id, true); }
+    else if (n === 3) {
+      tut.passiveOpp = false;
+      const opp = game.away.players[6];
+      opp.x = CFG.PW/2; opp.y = CFG.PL*0.50; opp.vx = 0; opp.vy = 0;
+      b.x = opp.x; b.y = opp.y + 0.8; b.z = 0; b.vx = 0; b.vy = 0; b.owner = opp.id; b.shot = false;
+      game.lastTouch = 'away'; game.lastTouchPlayer = opp.id;
+      const chaser = game.home.players[7]; chaser.x = CFG.PW/2; chaser.y = CFG.PL*0.62; chaser.vx = 0; chaser.vy = 0;
+      setActive(chaser.id, true);
+      tut.dribbleOppId = opp.id;          // this opponent just holds the ball (no passing) — a clean tackle target
+    }
+    else if (n === 4) { tut.passiveOpp = true; }
+    const el = $('tutorial-prompt');
+    el.innerHTML = `<span class="tut-step">Step ${Math.min(n+1,4)} of 4</span>${TUT_STEPS[n]}<span class="tut-skip">pause (↑↓↑↓ or Esc) to skip</span>`;
+    el.classList.remove('hidden');
+  }
+  function tickTutorial(dt) {
+    const tut = game.tutorial; if (!tut) return;
+    tut.stepT += dt;
+    const o = playerById(game.ball.owner);
+    if (tut.step === 0) { if (tut.steerCount >= 3 && tut.stepT > 1.0) advanceTut(); }
+    else if (tut.step === 1) { if (tut.passed) advanceTut(); }
+    else if (tut.step === 2) { if (tut.shot) advanceTut(); }
+    else if (tut.step === 3) { if (o && o.side === 'home') advanceTut(); }
+  }
+  function advanceTut() {
+    const tut = game.tutorial; if (!tut) return;
+    if (tut.step >= TUT_STEPS.length - 1) return;   // final step waits for a pinch
+    SFX.whistle();
+    setupTutStep(tut.step + 1);
+  }
+  function finishTutorial() {
+    game.tutorial = null; game.matchMode = 'friendly';
+    $('tutorial-prompt').classList.add('hidden');
+    game.history = []; navigateTo('title', { addToHistory:false });
+  }
+
+  // ============================================================
+  // CAREER — multiple seasons, trophy cabinet, Golden Boot race
+  // ============================================================
+  const FIRST_INITIALS = ['A','B','C','D','E','F','G','H','J','K','L','M','N','O','P','R','S','T','V','W'];
+  const SURNAMES = ['Marsh','Okafor','Bianchi','Sato','Kovac','Reyes','Nilsson','Haas','Costa','Park','Vela','Lund','Mensah','Rossi','Dubois','Aguilar','Petrov','Stein','Walsh','Ferreira','Becker','Nakamura','Sorin','Lindqvist','Adeyemi','Castro','Novak','Olsen','Tan','Vega','Hassan','Berg','Cruz','Mahler','Ito','Schmidt','Hale','Roca','Diallo','Quinn'];
+  function genRoster(teamId) {
+    let s = 0; for (let i=0;i<teamId.length;i++) s = (s*31 + teamId.charCodeAt(i)) | 0;
+    const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    const sur = SURNAMES.slice();
+    for (let i = sur.length-1; i > 0; i--) { const j = Math.floor(rnd()*(i+1)); const t = sur[i]; sur[i] = sur[j]; sur[j] = t; }
+    const roster = {};
+    for (let num = 1; num <= 11; num++) roster[num] = FIRST_INITIALS[Math.floor(rnd()*FIRST_INITIALS.length)] + '. ' + sur[num % sur.length];
+    return roster;
+  }
+  function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); }
+  function scorerName(teamId, num) { const c = game.career; return (c.rosters[teamId] && c.rosters[teamId][num]) || ('#'+num); }
+
+  function startNewCareerFlow() {
+    game.ts.mode = 'career'; game.ts.step = 0;
+    game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+    navigateTo('team-select');
+  }
+  function startCareer(youId) {
+    _seed = (Date.now() & 0x7fffffff) ^ 0x13371337;
+    const rosters = {}; TEAMS.forEach(t => rosters[t.id] = genRoster(t.id));
+    game.career = { team: youId, season: 1, tab: 'table', trophies: [], history: [], bootHistory: [], rosters, cur: null, seasonScorers: {} };
+    newCareerSeason();
+    game.ts.you = youId; saveStore();
+    navigateTo('career', { addToHistory: false }); game.history = ['title'];
+    renderCareer(`Season 1 — welcome to ${teamById(youId).name}!`);
+  }
+  function newCareerSeason() {
+    const c = game.career;
+    const ids = shuffle(TEAMS.map(t => t.id));
+    const fixtures = roundRobin(ids);
+    c.cur = { teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false };
+    c.seasonScorers = {};
+  }
+  function careerFixtureForYou() {
+    const cur = game.career.cur, rd = cur.fixtures[cur.round];
+    for (let i = 0; i < rd.length; i++) if (rd[i][0] === game.career.team || rd[i][1] === game.career.team) return { idx: i, pair: rd[i] };
+    return null;
+  }
+  function careerPlay() {
+    const c = game.career; if (!c || c.cur.done) return;
+    const f = careerFixtureForYou(); if (!f || c.cur.results[c.cur.round][f.idx]) return;
+    const opp = f.pair[0] === c.team ? f.pair[1] : f.pair[0];
+    startMatch(c.team, opp);
+    game.matchMode = 'career'; game.history = ['career'];
+  }
+  function careerAdvance() {
+    const c = game.career; if (!c) return;
+    if (c.cur.done) { c.season++; newCareerSeason(); saveStore(); renderCareer(`Season ${c.season} — a new campaign begins.`); }
+    else careerPlay();
+  }
+  function pickScorerNum() {
+    const W = { 9:5, 7:3, 11:3, 10:3, 8:2, 4:1, 2:1, 3:1, 5:1, 6:1 };
+    let tot = 0; for (const k in W) tot += W[k];
+    let r = srand() * tot;
+    for (const k in W) { r -= W[k]; if (r <= 0) return +k; }
+    return 9;
+  }
+  function distributeGoals(teamId, n) {
+    const ss = game.career.seasonScorers;
+    for (let k = 0; k < n; k++) { const key = teamId + '#' + pickScorerNum(); ss[key] = (ss[key] || 0) + 1; }
+  }
+  function bootTable() {
+    const ss = game.career.seasonScorers, arr = [];
+    for (const key in ss) { const p = key.split('#'); arr.push({ teamId: p[0], num: +p[1], goals: ss[key] }); }
+    arr.sort((a, b) => b.goals - a.goals || (a.teamId < b.teamId ? -1 : 1));
+    return arr;
+  }
+  function onCareerMatchEnd() {
+    const c = game.career, cur = c.cur, f = careerFixtureForYou();
+    const ys = game.home.score, os = game.away.score;
+    cur.results[cur.round][f.idx] = f.pair[0] === c.team ? [ys, os] : [os, ys];
+    const rd = cur.fixtures[cur.round];
+    for (let i = 0; i < rd.length; i++) {
+      if (i === f.idx || cur.results[cur.round][i]) continue;
+      const r = simWinner(rd[i][0], rd[i][1]);
+      cur.results[cur.round][i] = r.score;
+      distributeGoals(rd[i][0], r.score[0]); distributeGoals(rd[i][1], r.score[1]);
+    }
+    if (cur.round >= cur.fixtures.length - 1) { onCareerSeasonEnd(); return; }
+    cur.round++; saveStore();
+    const w = ys > os, d = ys === os;
+    navigateTo('career', { addToHistory: false }); game.history = ['title'];
+    renderCareer((w ? 'Win! ' : d ? 'Draw. ' : 'Lost. ') + `Matchday ${cur.round + 1}.`);
+  }
+  function onCareerSeasonEnd() {
+    const c = game.career, table = computeTable(c.cur);
+    c.cur.done = true;
+    const pos = table.findIndex(t => t.id === c.team) + 1, me = table[pos-1];
+    c.history.push({ season: c.season, pos, Pts: me.Pts, W: me.W, D: me.D, L: me.L, champion: table[0].id });
+    if (pos === 1) c.trophies.push({ season: c.season, title: 'League' });
+    const boot = bootTable();
+    if (boot[0]) c.bootHistory.push({ season: c.season, teamId: boot[0].teamId, num: boot[0].num, name: scorerName(boot[0].teamId, boot[0].num), goals: boot[0].goals });
+    saveStore();
+    navigateTo('career', { addToHistory: false }); game.history = ['title'];
+    renderCareer(`Season ${c.season}: finished ${ordinal(pos)}` + (pos === 1 ? ' — CHAMPIONS! 🏆' : '') + '.');
+  }
+
+  function careerTableHTML() {
+    const c = game.career, table = computeTable(c.cur);
+    let h = `<div class="lg-row lg-head"><span class="lg-pos">#</span><span class="lg-team">Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span class="lg-pts">Pts</span></div>`;
+    table.forEach((t, i) => {
+      const you = t.id === c.team ? ' you-row' : '', champ = c.cur.done && i === 0 ? ' lg-champ' : '';
+      h += `<div class="lg-row${you}${champ}"><span class="lg-pos">${i+1}</span><span class="lg-team"><span class="ct-dot" style="background:${teamById(t.id).col}"></span>${teamById(t.id).code}</span><span>${t.P}</span><span>${t.W}</span><span>${t.D}</span><span>${t.L}</span><span>${t.GD>0?'+':''}${t.GD}</span><span class="lg-pts">${t.Pts}</span></div>`;
+    });
+    return h;
+  }
+  function careerScorersHTML() {
+    const c = game.career, boot = bootTable().slice(0, 10);
+    if (!boot.length) return `<p class="cr-empty">No goals yet — play a match to start the Golden Boot race.</p>`;
+    let h = `<div class="cr-boot-head">🥇 Golden Boot — Season ${c.season}</div>`;
+    boot.forEach((b, i) => {
+      const you = b.teamId === c.team ? ' you-row' : '';
+      h += `<div class="cr-boot-row${you}"><span class="cr-rank">${i+1}</span><span class="cr-name">${scorerName(b.teamId, b.num)}</span><span class="cr-club"><span class="ct-dot" style="background:${teamById(b.teamId).col}"></span>${teamById(b.teamId).code}</span><span class="cr-goals">${b.goals}</span></div>`;
+    });
+    return h;
+  }
+  function careerHistoryHTML() {
+    const c = game.career;
+    let h = `<div class="cr-cabinet"><span class="cr-trophy">🏆</span><div><div class="cr-trophy-n">${c.trophies.length} League ${c.trophies.length===1?'title':'titles'}</div><div class="cr-trophy-sub">${teamById(c.team).name}</div></div></div>`;
+    if (!c.history.length) { h += `<p class="cr-empty">Finish a season to fill your cabinet.</p>`; return h; }
+    h += `<div class="cr-hist-head">Past seasons</div>`;
+    c.history.slice().reverse().forEach(s => {
+      const won = s.pos === 1;
+      h += `<div class="cr-hist-row"><span class="cr-hist-s">S${s.season}</span><span class="cr-hist-pos${won?' won':''}">${ordinal(s.pos)}${won?' 🏆':''}</span><span class="cr-hist-pts">${s.Pts} pts</span><span class="cr-hist-champ"><span class="ct-dot" style="background:${teamById(s.champion).col}"></span>${teamById(s.champion).code}</span></div>`;
+    });
+    if (c.bootHistory.length) {
+      h += `<div class="cr-hist-head">Golden Boots</div>`;
+      c.bootHistory.slice().reverse().forEach(b => { h += `<div class="cr-hist-row"><span class="cr-hist-s">S${b.season}</span><span class="cr-name">${b.name}</span><span class="cr-club">${teamById(b.teamId).code}</span><span class="cr-goals">${b.goals}</span></div>`; });
+    }
+    return h;
+  }
+  function renderCareer(status) {
+    const c = game.career; if (!c) return;
+    $('career-title').textContent = teamById(c.team).name;
+    $('career-meta').textContent = c.cur.done ? `Season ${c.season} · done` : `Season ${c.season} · MD ${c.cur.round+1}/${c.cur.fixtures.length}`;
+    const tab = c.tab || 'table';
+    ['table','scorers','history'].forEach(t => { const el = document.querySelector(`[data-action="career-tab-${t}"]`); if (el) el.classList.toggle('on', t === tab); });
+    $('career-content').innerHTML = tab === 'table' ? careerTableHTML() : tab === 'scorers' ? careerScorersHTML() : careerHistoryHTML();
+    if (status != null) $('career-status').textContent = status;
+    const cp = $('career-play');
+    if (c.cur.done) { cp.textContent = `Start Season ${c.season + 1}`; }
+    else { const f = careerFixtureForYou(); const opp = f ? (f.pair[0] === c.team ? f.pair[1] : f.pair[0]) : null; cp.textContent = opp ? `Play Match · ${teamById(c.team).code} v ${teamById(opp).code}` : 'Play Match'; }
   }
 
   // ============================================================
@@ -1795,37 +2058,50 @@
   function drawStaticPitch() {
     const g = geom, p = pitchCtx;
     p.clearRect(0, 0, 600, 600);
-    // surrounding floodlit darkness + faint stands
-    const grad = p.createRadialGradient(300, 300, 80, 300, 300, 360);
-    grad.addColorStop(0, 'rgba(20,40,30,0.22)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
-    p.fillStyle = grad; p.fillRect(0, 0, 600, 600);
+    // stadium glow behind the pitch
+    const sgrad = p.createRadialGradient(g.ox+g.pw/2, g.oy+g.ph*0.45, 50, g.ox+g.pw/2, g.oy+g.ph*0.45, 430);
+    sgrad.addColorStop(0, 'rgba(20,48,34,0.22)'); sgrad.addColorStop(1, 'rgba(0,0,0,0)');
+    p.fillStyle = sgrad; p.fillRect(0, 0, 600, 600);
 
-    // pitch base + mowed stripes (along the length)
-    const stripes = 10, sh = g.ph / stripes;
+    // grass base + mowed stripes with a subtle turf sheen (vertical gradient per stripe)
+    p.fillStyle = '#0a2014'; p.fillRect(g.ox, g.oy, g.pw, g.ph);
+    const stripes = 12, sh = g.ph / stripes;
     for (let i = 0; i < stripes; i++) {
-      p.fillStyle = i % 2 === 0 ? '#0c2c1b' : '#0a2416';
-      p.fillRect(g.ox, g.oy + i * sh, g.pw, sh + 0.6);
+      const y = g.oy + i * sh;
+      const lg = p.createLinearGradient(0, y, 0, y + sh);
+      if (i % 2 === 0) { lg.addColorStop(0, '#103622'); lg.addColorStop(1, '#0c2a1a'); }
+      else            { lg.addColorStop(0, '#0c2819'); lg.addColorStop(1, '#091f12'); }
+      p.fillStyle = lg; p.fillRect(g.ox, y, g.pw, sh + 0.6);
     }
-    // subtle vignette over pitch
+    // floodlight pool (centre brighter) + edge vignettes for focus
+    const fl = p.createRadialGradient(g.ox+g.pw/2, g.oy+g.ph*0.45, 25, g.ox+g.pw/2, g.oy+g.ph*0.45, g.ph*0.62);
+    fl.addColorStop(0, 'rgba(150,210,165,0.10)'); fl.addColorStop(1, 'rgba(0,0,0,0)');
+    p.fillStyle = fl; p.fillRect(g.ox, g.oy, g.pw, g.ph);
     const vg = p.createLinearGradient(0, g.oy, 0, g.oy + g.ph);
-    vg.addColorStop(0, 'rgba(0,0,0,0.18)'); vg.addColorStop(0.5, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.18)');
+    vg.addColorStop(0, 'rgba(0,0,0,0.24)'); vg.addColorStop(0.5, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.24)');
     p.fillStyle = vg; p.fillRect(g.ox, g.oy, g.pw, g.ph);
+    const hv = p.createLinearGradient(g.ox, 0, g.ox + g.pw, 0);
+    hv.addColorStop(0, 'rgba(0,0,0,0.20)'); hv.addColorStop(0.5, 'rgba(0,0,0,0)'); hv.addColorStop(1, 'rgba(0,0,0,0.20)');
+    p.fillStyle = hv; p.fillRect(g.ox, g.oy, g.pw, g.ph);
 
-    // glowing lines
-    p.strokeStyle = 'rgba(225,255,238,0.92)';
+    // glowing markings
+    p.strokeStyle = 'rgba(234,255,243,0.95)';
     p.lineWidth = 2;
-    p.shadowColor = 'rgba(120,255,190,0.55)'; p.shadowBlur = 6;
+    p.shadowColor = 'rgba(120,255,190,0.5)'; p.shadowBlur = 5;
     const L = (x1,y1,x2,y2)=>{ p.beginPath(); p.moveTo(wx(x1),wy(y1)); p.lineTo(wx(x2),wy(y2)); p.stroke(); };
     const RECT = (x,y,w,h)=>{ p.beginPath(); p.rect(wx(x),wy(y),w*g.s,h*g.s); p.stroke(); };
-    // boundary
     RECT(0, 0, CFG.PW, CFG.PL);
-    // halfway
     L(0, CFG.PL/2, CFG.PW, CFG.PL/2);
-    // center circle + spot
     p.beginPath(); p.arc(wx(CFG.PW/2), wy(CFG.PL/2), CFG.centerR * g.s, 0, 6.2832); p.stroke();
     dot(p, CFG.PW/2, CFG.PL/2, 2.2);
-    // boxes both ends
     drawBoxes(p, true); drawBoxes(p, false);
+    // corner arcs
+    const cR = 1.0 * g.s;
+    const carc = (cx, cy, a0, a1) => { p.beginPath(); p.arc(wx(cx), wy(cy), cR, a0, a1); p.stroke(); };
+    carc(0, 0, 0, Math.PI/2);
+    carc(CFG.PW, 0, Math.PI/2, Math.PI);
+    carc(CFG.PW, CFG.PL, Math.PI, Math.PI*1.5);
+    carc(0, CFG.PL, Math.PI*1.5, Math.PI*2);
     p.shadowBlur = 0;
     // goals + nets
     drawGoal(p, true); drawGoal(p, false);
@@ -1848,37 +2124,32 @@
     const g = geom;
     const gx0 = CFG.PW/2 - CFG.goalHalfW, gx1 = CFG.PW/2 + CFG.goalHalfW;
     const gy = top ? 0 : CFG.PL;
-    const depth = (top ? -1 : 1) * CFG.goalDepth;
-    const back = gy + depth;
-    // net mesh (trapezoid behind the line)
-    p.save();
-    p.strokeStyle = 'rgba(200,235,255,0.30)'; p.lineWidth = 1; p.shadowBlur = 0;
+    const back = gy + (top ? -1 : 1) * CFG.goalDepth;
     const nx0 = wx(gx0), nx1 = wx(gx1), ny0 = wy(gy), ny1 = wy(back);
-    const inset = 6 * (top ? 1 : 1);
+    const inset = 7;
     const bnx0 = nx0 + inset, bnx1 = nx1 - inset;
-    // verticals
-    for (let i = 0; i <= 7; i++) {
-      const fx = i/7;
-      const xF = lerp(nx0, nx1, fx), xB = lerp(bnx0, bnx1, fx);
-      p.beginPath(); p.moveTo(xF, ny0); p.lineTo(xB, ny1); p.stroke();
-    }
-    // horizontals
-    for (let j = 0; j <= 4; j++) {
-      const fy = j/4;
-      const yy = lerp(ny0, ny1, fy);
-      const xL = lerp(nx0, bnx0, fy), xR = lerp(nx1, bnx1, fy);
-      p.beginPath(); p.moveTo(xL, yy); p.lineTo(xR, yy); p.stroke();
-    }
-    p.restore();
-    // posts + crossbar (bright)
     p.save();
-    p.strokeStyle = 'rgba(255,255,255,0.98)'; p.lineWidth = 3.2;
-    p.shadowColor = 'rgba(150,230,255,0.8)'; p.shadowBlur = 8;
+    // faint net fill (gives the goal volume)
+    p.fillStyle = 'rgba(190,225,255,0.05)';
+    p.beginPath(); p.moveTo(nx0, ny0); p.lineTo(nx1, ny0); p.lineTo(bnx1, ny1); p.lineTo(bnx0, ny1); p.closePath(); p.fill();
+    // fine net mesh, softly lit
+    p.strokeStyle = 'rgba(196,228,255,0.36)'; p.lineWidth = 0.8;
+    p.shadowColor = 'rgba(150,220,255,0.4)'; p.shadowBlur = 3;
+    for (let i = 0; i <= 11; i++) { const f = i/11; p.beginPath(); p.moveTo(lerp(nx0,nx1,f), ny0); p.lineTo(lerp(bnx0,bnx1,f), ny1); p.stroke(); }
+    for (let j = 0; j <= 6; j++) { const f = j/6; const yy = lerp(ny0,ny1,f); p.beginPath(); p.moveTo(lerp(nx0,bnx0,f), yy); p.lineTo(lerp(nx1,bnx1,f), yy); p.stroke(); }
+    p.restore();
+    // posts + crossbar (solid, bright, glowing) + a back bar for 3D
+    p.save();
+    p.lineCap = 'round';
+    p.strokeStyle = '#ffffff'; p.lineWidth = 3.6;
+    p.shadowColor = 'rgba(150,230,255,0.9)'; p.shadowBlur = 9;
     p.beginPath();
     p.moveTo(nx0, ny0); p.lineTo(nx0, ny1);
     p.moveTo(nx1, ny0); p.lineTo(nx1, ny1);
     p.moveTo(nx0, ny0); p.lineTo(nx1, ny0);
     p.stroke();
+    p.lineWidth = 2; p.strokeStyle = 'rgba(255,255,255,0.85)';
+    p.beginPath(); p.moveTo(bnx0, ny1); p.lineTo(bnx1, ny1); p.stroke();
     p.restore();
   }
 
@@ -2010,12 +2281,22 @@
     // captain's armband
     if (p.captain) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(sx - bodyR*0.66, sy - bodyR*0.22, bodyR*0.24, bodyR*0.36); }
 
-    // head (leads in facing direction)
+    // goalkeeper gloves
+    if (p.isGK) {
+      ctx.fillStyle = '#eef4ff';
+      ctx.beginPath(); ctx.arc(sx - bodyR*0.72, sy + bodyR*0.08, bodyR*0.22, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx + bodyR*0.72, sy + bodyR*0.08, bodyR*0.22, 0, 6.2832); ctx.fill();
+    }
+
+    // head (leads in facing direction) with a hair cap for definition
     const hx = sx + Math.cos(p.heading) * bodyR*0.5;
     const hy = sy + Math.sin(p.heading) * bodyR*0.5 - bodyR*0.18;
     ctx.fillStyle = '#f0c79e';
     ctx.beginPath(); ctx.arc(hx, hy, bodyR*0.44, 0, 6.2832); ctx.fill();
-    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.stroke();
+    ctx.fillStyle = '#34281e';
+    ctx.beginPath(); ctx.arc(hx, hy, bodyR*0.44, Math.PI, 2*Math.PI); ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath(); ctx.arc(hx, hy, bodyR*0.44, 0, 6.2832); ctx.stroke();
 
     // number
     ctx.fillStyle = pickInk(col); ctx.font = `800 ${Math.round(bodyR*0.85)}px -apple-system, system-ui, sans-serif`;
@@ -2214,6 +2495,11 @@
       leaguePlay: () => leaguePlay(),
       league: () => game.league,
       leagueTable: () => leagueTable(),
+      startTutorial: () => startTutorial(),
+      tutorial: () => game.tutorial,
+      startCareer: (you) => startCareer(you || TEAMS[0].id),
+      careerAdvance: () => careerAdvance(),
+      career: () => game.career,
       pen: () => game.penalty,
       penFast: (v) => { game._penFast = !!v; },
       penKick: (dir) => { penInput(dir || 'ArrowUp'); penInput('Enter'); },

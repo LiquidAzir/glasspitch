@@ -697,6 +697,13 @@
     tickDispossess(dt);
     updateBall(dt);
     updateKeepers(dt);
+    resolveCollisions();
+    // re-glue the dribbled ball to the carrier (collision may have nudged them)
+    const carrier = playerById(game.ball.owner);
+    if (carrier && !carrier.isGK) {
+      game.ball.x = carrier.x + Math.cos(carrier.heading) * CFG.controlDist;
+      game.ball.y = carrier.y + Math.sin(carrier.heading) * CFG.controlDist;
+    }
     checkBounds();
     tickEffects(dt);
     decayRipples(dt);
@@ -783,6 +790,30 @@
       b.vx = p.vx; b.vy = p.vy;
       // AI carriers decide what to do
       if (!isActive) aiOnBall(p, dt);
+    }
+  }
+
+  // ----- player-vs-player collision: stop everyone occupying the same spot -----
+  function resolveCollisions() {
+    const ps = allPlayers(), owner = game.ball.owner;
+    for (let i = 0; i < ps.length; i++) {
+      const a = ps[i];
+      for (let j = i + 1; j < ps.length; j++) {
+        const c = ps[j];
+        // let a challenger get right up against the carrier (so tackling/pressure still works)
+        const minD = (a.id === owner || c.id === owner) ? 1.0 : 1.65;
+        let dx = c.x - a.x, dy = c.y - a.y, d2 = dx*dx + dy*dy;
+        if (d2 >= minD*minD) continue;
+        let d = Math.sqrt(d2), ux, uy;
+        if (d < 1e-3) { const ang = i*1.7 + j*0.9; ux = Math.cos(ang); uy = Math.sin(ang); d = 0.001; }
+        else { ux = dx/d; uy = dy/d; }
+        const overlap = (minD - d) * 0.7;                 // soft — separate over a couple frames
+        // keepers stay planted; otherwise split the push
+        const aMove = a.isGK ? 0 : (c.isGK ? 1 : 0.5);
+        const cMove = c.isGK ? 0 : (a.isGK ? 1 : 0.5);
+        a.x -= ux * overlap * aMove; a.y -= uy * overlap * aMove;
+        c.x += ux * overlap * cMove; c.y += uy * overlap * cMove;
+      }
     }
   }
 
@@ -1932,8 +1963,8 @@
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
     const hasBall = game.ball.owner === p.id;
     const r = p.isGK ? 3.3 : 3.0;
-    let bodyR = Math.max(7, r * s * 0.5 + 4);
-    if (isActive) bodyR *= 1.14;                     // the player you control is drawn a touch larger
+    let bodyR = Math.max(6.5, r * s * 0.46 + 3.5);
+    if (isActive) bodyR *= 1.2;                      // the player you control clearly stands out
 
     // dash trail
     if (isActive && p.dashT > 0) {

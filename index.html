@@ -30,7 +30,7 @@
         <p class="title-tagline">Holographic soccer for Meta Ray-Ban Display</p>
         <nav class="title-menu">
           <button class="title-btn focusable" data-action="quick-match">Kick Off</button>
-          <button class="title-btn focusable" data-action="goto-cup">Cup</button>
+          <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
           <button class="title-btn focusable" data-action="choose-teams">Choose Teams</button>
           <button class="title-btn focusable" data-action="goto-how">How to Play</button>
           <button class="title-btn focusable" data-action="goto-settings">Settings</button>
@@ -176,6 +176,51 @@
           <button class="title-btn focusable" data-action="quit-title">Title</button>
         </nav>
       </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TOURNAMENTS HUB                                              -->
+    <!-- ============================================================ -->
+    <div id="tournaments" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>Tournaments</h1>
+      </header>
+      <div class="content tourn-list">
+        <button class="tourn-card focusable" data-action="goto-cup">
+          <div class="tourn-ic">🏆</div>
+          <div class="tourn-info">
+            <div class="tourn-name">Cup</div>
+            <div class="tourn-desc">8-team knockout. Win or go home — level ties are settled by a penalty shootout.</div>
+          </div>
+        </button>
+        <button class="tourn-card focusable" data-action="goto-league">
+          <div class="tourn-ic">🥇</div>
+          <div class="tourn-info">
+            <div class="tourn-name">League</div>
+            <div class="tourn-desc">Full season. Play every team once, earn points, top the table to win the title.</div>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- LEAGUE (round-robin season)                                  -->
+    <!-- ============================================================ -->
+    <div id="league" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>League</h1>
+        <span class="header-meta" id="league-round">Matchday 1</span>
+      </header>
+      <div class="content">
+        <div class="league-table" id="league-table"></div>
+        <p class="cup-status" id="league-status"></p>
+      </div>
+      <nav class="cup-actions">
+        <button class="ts-confirm focusable" data-action="league-play" id="league-play">Play Match</button>
+        <button class="title-btn focusable" data-action="league-new" id="league-new">New Season</button>
+      </nav>
     </div>
 
     <!-- ============================================================ -->

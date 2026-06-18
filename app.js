@@ -41,7 +41,7 @@
 
   // sim-seconds per half (45 sim-min = 2700s) and the real time it takes
   const HALF_SIM = 2700;
-  const LENGTHS = { Short: 45, Normal: 90, Long: 150 };           // real seconds / half
+  const LENGTHS = { Short: 90, Normal: 165, Long: 300 };          // real seconds / half (≈3 / 5.5 / 10 min matches)
   const DIFFS = {
     Easy:   { spd: 0.92, pass: 0.80, shot: 0.78, react: 0.45, press: 0.80, tackle: 0.85, mate: 1.04 },
     Normal: { spd: 1.00, pass: 0.88, shot: 0.86, react: 0.30, press: 1.00, tackle: 1.00, mate: 1.00 },
@@ -103,6 +103,13 @@
   const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; };
   function approach(cur, target, maxDelta) {
     const d = target - cur;
+    if (Math.abs(d) <= maxDelta) return target;
+    return cur + Math.sign(d) * maxDelta;
+  }
+  function angleApproach(cur, target, maxDelta) {
+    let d = target - cur;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
     if (Math.abs(d) <= maxDelta) return target;
     return cur + Math.sign(d) * maxDelta;
   }
@@ -249,6 +256,7 @@
     else if (id === 'halftime') { $('ht-score').textContent = scoreLine(); renderStatGrid($('ht-stats')); }
     else if (id === 'result') renderResult();
     else if (id === 'cup') renderCup();
+    else if (id === 'league') renderLeague();
     else if (id === 'shootout') { drawPen(); penInstr(); }
     else if (id === 'match') { game.guardUntil = performance.now() + 220; render(); updateHud(true); }
   }
@@ -264,6 +272,7 @@
       if (s.record) Object.assign(game.record, s.record);
       if (s.lastTeams) { game.ts.you = s.lastTeams.you; game.ts.opp = s.lastTeams.opp; }
       if (s.cup && s.cup.rounds) game.cup = s.cup;
+      if (s.league && s.league.fixtures) game.league = s.league;
     } catch (e) {}
   }
   function saveStore() {
@@ -272,6 +281,7 @@
         settings: game.settings, record: game.record,
         lastTeams: { you: game.ts.you, opp: game.ts.opp },
         cup: game.cup || null,
+        league: game.league || null,
       }));
     } catch (e) {}
   }
@@ -298,11 +308,11 @@
   }
   function renderTeamSelect() {
     const ts = game.ts;
-    const cup = ts.mode === 'cup';
-    $('ts-title').textContent = cup ? 'Pick Your Team' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = cup ? 'CUP' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = cup ? 'Enter Cup' : 'Select';
-    $('ts-random').classList.toggle('hidden', cup || ts.step === 0);
+    const tour = ts.mode === 'cup' || ts.mode === 'league';
+    $('ts-title').textContent = tour ? 'Pick Your Team' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : 'Select';
+    $('ts-random').classList.toggle('hidden', tour || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
     crest.textContent = t.glyph;
@@ -325,6 +335,7 @@
   function tsConfirm() {
     const ts = game.ts;
     if (ts.mode === 'cup') { ts.mode = null; startCup(TEAMS[ts.idx].id); return; }
+    if (ts.mode === 'league') { ts.mode = null; startLeague(TEAMS[ts.idx].id); return; }
     if (ts.step === 0) {
       ts.you = TEAMS[ts.idx].id;
       ts.step = 1;
@@ -378,6 +389,7 @@
 
   function startMatch(homeId, awayId) {
     _seed = (Date.now() & 0x7fffffff) ^ 0x9e3779b9;
+    game.matchMode = 'friendly';   // cup/league callers override this after starting
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
@@ -569,9 +581,13 @@
         game.ts.you = you; game.ts.opp = opp; startMatch(you, opp); break;
       }
       case 'choose-teams': game.ts.mode = null; game.ts.step = 0; game.ts.idx = Math.max(0, TEAMS.findIndex(t=>t.id===game.ts.you)); if (game.ts.idx<0) game.ts.idx=0; navigateTo('team-select'); break;
+      case 'goto-tournaments': navigateTo('tournaments'); break;
       case 'goto-cup': if (game.cup) navigateTo('cup'); else startNewCupFlow(); break;
       case 'cup-play': cupPlay(); break;
       case 'cup-new': startNewCupFlow(); break;
+      case 'goto-league': if (game.league) navigateTo('league'); else startNewLeagueFlow(); break;
+      case 'league-play': leaguePlay(); break;
+      case 'league-new': startNewLeagueFlow(); break;
       case 'goto-how': navigateTo('how'); break;
       case 'goto-settings': navigateTo('settings'); break;
       case 'back': navigateBack(); break;
@@ -587,7 +603,7 @@
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
       case 'resume': resumeMatch(); break;
       case 'resume-second': startSecondHalf(); break;
-      case 'restart-match': startMatch(game.home.teamId, game.away.teamId); break;
+      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId); game.matchMode = m; if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
       case 'quit-title': game.history = []; navigateTo('title', { addToHistory:false }); break;
     }
@@ -731,18 +747,32 @@
       mvx = m.x; mvy = m.y; sprint = m.sprint;
     }
 
-    // accelerate toward desired velocity
+    // Momentum-aware steering: rotate the velocity toward the desired direction
+    // (curved turns) and ease the speed — feels fluid instead of snapping.
     const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;
-    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * (b.owner === p.id ? 0.93 : 1);
-    const dvx = mvx * maxV, dvy = mvy * maxV;
-    const acc = CFG.playerAccel * dt;
-    p.vx = approach(p.vx, dvx, acc);
-    p.vy = approach(p.vy, dvy, acc);
+    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * (b.owner === p.id ? 0.95 : 1);
+    const moveLen = len(mvx, mvy);
+    let curSpeed = len(p.vx, p.vy);
+    if (moveLen > 0.01) {
+      const desAng = Math.atan2(mvy, mvx);
+      let velAng = curSpeed > 0.4 ? Math.atan2(p.vy, p.vx) : (p._velAng != null ? p._velAng : desAng);
+      const turnRate = lerp(13, 6, clamp(curSpeed / CFG.playerMax, 0, 1)); // pivot when slow, arc at speed
+      velAng = angleApproach(velAng, desAng, turnRate * dt);
+      p._velAng = velAng;
+      const ns = approach(curSpeed, maxV * Math.min(1, moveLen), CFG.playerAccel * dt);
+      p.vx = Math.cos(velAng) * ns; p.vy = Math.sin(velAng) * ns;
+    } else {
+      const ns = approach(curSpeed, 0, CFG.playerAccel * 1.5 * dt);
+      if (curSpeed > 1e-4) { p.vx = p.vx / curSpeed * ns; p.vy = p.vy / curSpeed * ns; } else { p.vx = 0; p.vy = 0; }
+    }
     p.x = clamp(p.x + p.vx * dt, -1.5, CFG.PW + 1.5);
     p.y = clamp(p.y + p.vy * dt, -3, CFG.PL + 3);
 
     const sp = len(p.vx, p.vy);
-    if (sp > 0.4) { p.heading = Math.atan2(p.vy, p.vx); p.runPhase += sp * dt * 1.4; }
+    if (sp > 0.4) {
+      p.heading = angleApproach(p.heading, Math.atan2(p.vy, p.vx), 14 * dt);  // smooth body turn
+      p.runPhase += sp * dt * 1.4;
+    }
 
     // dribble: glue ball just ahead of the carrier
     if (b.owner === p.id) {
@@ -1317,8 +1347,9 @@
   function goFulltime() {
     game.phase = 'ended';
     SFX.whistle();
+    if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
+    if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
     const hs = game.home.score, as = game.away.score;
-    if (game.cup) { onCupMatchEnd(); return; }
     if (hs > as) game.record.w++; else if (hs < as) game.record.l++; else game.record.d++;
     saveStore();
     navigateTo('result');
@@ -1362,7 +1393,7 @@
     const c = game.cup; if (!c || !c.alive || c.champion) return;
     const opp = cupOpponent(); if (!opp) return;
     startMatch(c.you, opp);
-    game.history = ['cup'];
+    game.matchMode = 'cup'; game.history = ['cup'];
   }
   function onCupMatchEnd() {
     const hs = game.home.score, as = game.away.score;
@@ -1584,6 +1615,105 @@
     x.fillStyle = '#a9c6b6'; x.fillText(teamById(c.opp).code, 300 - Math.max(5, c.histA.length)*10 - 12, 112);
     row(c.histA, 112);
     x.textBaseline = 'alphabetic';
+  }
+
+  // ============================================================
+  // LEAGUE — round-robin season (8 teams, 7 matchdays)
+  // ============================================================
+  function roundRobin(ids) {
+    const arr = ids.slice(), n = arr.length, rounds = [];
+    for (let r = 0; r < n - 1; r++) {
+      const pairs = [];
+      for (let i = 0; i < n/2; i++) pairs.push([arr[i], arr[n-1-i]]);
+      rounds.push(pairs);
+      arr.splice(1, 0, arr.pop());   // rotate, keep arr[0] fixed
+    }
+    return rounds;
+  }
+  function startNewLeagueFlow() {
+    game.ts.mode = 'league'; game.ts.step = 0;
+    game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+    navigateTo('team-select');
+  }
+  function startLeague(youId) {
+    _seed = (Date.now() & 0x7fffffff) ^ 0x2545f491;
+    const ids = shuffle(TEAMS.map(t => t.id));
+    const fixtures = roundRobin(ids);
+    game.league = { you: youId, teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false, champion: null };
+    game.ts.you = youId; saveStore();
+    navigateTo('league', { addToHistory: false }); game.history = ['title'];
+    renderLeague('Matchday 1 — kick off your season!');
+  }
+  function leagueFixtureForYou() {
+    const lg = game.league, rd = lg.fixtures[lg.round];
+    for (let i = 0; i < rd.length; i++) if (rd[i][0] === lg.you || rd[i][1] === lg.you) return { idx: i, pair: rd[i] };
+    return null;
+  }
+  function leaguePlay() {
+    const lg = game.league; if (!lg || lg.done) return;
+    const f = leagueFixtureForYou(); if (!f || lg.results[lg.round][f.idx]) return;
+    const opp = f.pair[0] === lg.you ? f.pair[1] : f.pair[0];
+    startMatch(lg.you, opp);
+    game.matchMode = 'league'; game.history = ['league'];
+  }
+  function onLeagueMatchEnd() {
+    const lg = game.league, f = leagueFixtureForYou();
+    const youScore = game.home.score, oppScore = game.away.score;
+    lg.results[lg.round][f.idx] = f.pair[0] === lg.you ? [youScore, oppScore] : [oppScore, youScore];
+    const rd = lg.fixtures[lg.round];
+    for (let i = 0; i < rd.length; i++) {
+      if (i === f.idx || lg.results[lg.round][i]) continue;
+      lg.results[lg.round][i] = simWinner(rd[i][0], rd[i][1]).score;
+    }
+    let msg;
+    if (lg.round >= lg.fixtures.length - 1) {
+      lg.done = true; lg.champion = leagueTable()[0].id;
+      msg = lg.champion === lg.you ? '🏆 Champions! You won the League!' : `${teamById(lg.champion).name} won the League.`;
+    } else {
+      lg.round++;
+      const w = youScore > oppScore, d = youScore === oppScore;
+      msg = (w ? 'Win! ' : d ? 'Draw. ' : 'Lost. ') + `On to Matchday ${lg.round + 1}.`;
+    }
+    saveStore();
+    navigateTo('league', { addToHistory: false }); game.history = ['title'];
+    renderLeague(msg);
+  }
+  function leagueTable() {
+    const lg = game.league, row = {};
+    lg.teams.forEach(id => row[id] = { id, P:0, W:0, D:0, L:0, GF:0, GA:0, GD:0, Pts:0 });
+    lg.fixtures.forEach((rd, r) => rd.forEach((pair, i) => {
+      const sc = lg.results[r] && lg.results[r][i]; if (!sc) return;
+      const A = row[pair[0]], B = row[pair[1]], ga = sc[0], gb = sc[1];
+      A.P++; B.P++; A.GF += ga; A.GA += gb; B.GF += gb; B.GA += ga;
+      if (ga > gb) { A.W++; B.L++; A.Pts += 3; }
+      else if (gb > ga) { B.W++; A.L++; B.Pts += 3; }
+      else { A.D++; B.D++; A.Pts++; B.Pts++; }
+    }));
+    const arr = lg.teams.map(id => row[id]);
+    arr.forEach(t => t.GD = t.GF - t.GA);
+    arr.sort((x, y) => y.Pts - x.Pts || y.GD - x.GD || y.GF - x.GF || (x.id < y.id ? -1 : 1));
+    return arr;
+  }
+  function renderLeague(status) {
+    const lg = game.league; if (!lg) return;
+    $('league-round').textContent = lg.done ? 'Season complete' : `Matchday ${lg.round + 1} / ${lg.fixtures.length}`;
+    const table = leagueTable();
+    let html = `<div class="lg-row lg-head"><span class="lg-pos">#</span><span class="lg-team">Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span class="lg-pts">Pts</span></div>`;
+    table.forEach((t, i) => {
+      const you = t.id === lg.you ? ' you-row' : '';
+      const champ = lg.done && i === 0 ? ' lg-champ' : '';
+      html += `<div class="lg-row${you}${champ}"><span class="lg-pos">${i+1}</span><span class="lg-team"><span class="ct-dot" style="background:${teamById(t.id).col};color:${teamById(t.id).col}"></span>${teamById(t.id).code}</span><span>${t.P}</span><span>${t.W}</span><span>${t.D}</span><span>${t.L}</span><span>${t.GD>0?'+':''}${t.GD}</span><span class="lg-pts">${t.Pts}</span></div>`;
+    });
+    $('league-table').innerHTML = html;
+    if (status != null) $('league-status').textContent = status;
+    const cp = $('league-play');
+    if (lg.done) cp.classList.add('hidden');
+    else {
+      const f = leagueFixtureForYou();
+      const opp = f ? (f.pair[0] === lg.you ? f.pair[1] : f.pair[0]) : null;
+      cp.classList.remove('hidden');
+      cp.textContent = opp ? `Play Match · ${teamById(lg.you).code} v ${teamById(opp).code}` : 'Play Match';
+    }
   }
 
   // ============================================================
@@ -1899,9 +2029,15 @@
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(sx, by, R, 0, 6.2832); ctx.fill();
     ctx.restore();
-    // pentagon hint
-    ctx.fillStyle = 'rgba(22,32,26,0.85)';
-    ctx.beginPath(); ctx.arc(sx, by, R*0.3, 0, 6.2832); ctx.fill();
+    // rolling seam (rotates as the ball travels) + center, so it reads as spinning
+    ctx.save();
+    ctx.translate(sx, by); ctx.rotate((b.x + b.y) * 0.6);
+    ctx.strokeStyle = 'rgba(22,32,26,0.55)'; ctx.lineWidth = Math.max(1, R*0.16);
+    ctx.beginPath(); ctx.arc(0, 0, R*0.6, 0.45, Math.PI - 0.45); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, R*0.6, Math.PI + 0.45, 2*Math.PI - 0.45); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(22,32,26,0.8)';
+    ctx.beginPath(); ctx.arc(sx, by, R*0.26, 0, 6.2832); ctx.fill();
   }
 
   function drawFx() {
@@ -2043,6 +2179,10 @@
       startCup: (you) => startCup(you || TEAMS[0].id),
       cupPlay: () => cupPlay(),
       cup: () => game.cup,
+      startLeague: (you) => startLeague(you || TEAMS[0].id),
+      leaguePlay: () => leaguePlay(),
+      league: () => game.league,
+      leagueTable: () => leagueTable(),
       pen: () => game.penalty,
       penFast: (v) => { game._penFast = !!v; },
       penKick: (dir) => { penInput(dir || 'ArrowUp'); penInput('Enter'); },

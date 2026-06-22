@@ -2908,8 +2908,8 @@
     renderer.outputColorSpace = T.SRGBColorSpace;
     cv3d.addEventListener('webglcontextlost', (e) => { e.preventDefault(); failTo2D('3D context lost — using 2D'); }, false);
     const scene = new T.Scene();
-    const camera = new T.PerspectiveCamera(39, 1, 0.5, 400);   // fixed broadcast cam behind the near goal (tuned to fit the whole pitch)
-    camera.position.set(0, 104, 140); camera.lookAt(0, 0, -6);
+    const camera = new T.PerspectiveCamera(49, 1, 0.5, 520);   // fixed side-on broadcast cam (past the sideline, elevated, looking across) — goals equidistant so play reads the same near either net
+    camera.position.set(-100, 74, 0); camera.lookAt(0, -1, 0);
     scene.add(new T.HemisphereLight(0x9bc2ff, 0x0a2014, 1.0));
     const dl = new T.DirectionalLight(0xffffff, 0.55); dl.position.set(8, 80, 50); scene.add(dl);
     // pitch ground (reuse the 2D art language via a full-bleed texture)
@@ -2931,9 +2931,9 @@
     };
     buildGoal(-CFG.PL / 2, -1); buildGoal(CFG.PL / 2, 1);
     // shared geometries
-    const bodyGeo = new T.CapsuleGeometry(0.62, 1.3, 6, 12); bodyGeo.translate(0, 1.27, 0);
-    const headGeo = new T.SphereGeometry(0.46, 14, 12); headGeo.translate(0, 2.42, 0);
-    const blobGeo = new T.CircleGeometry(0.95, 18); blobGeo.rotateX(-Math.PI / 2);
+    const bodyGeo = new T.CapsuleGeometry(0.7, 1.5, 6, 12); bodyGeo.translate(0, 1.45, 0);
+    const headGeo = new T.SphereGeometry(0.52, 14, 12); headGeo.translate(0, 2.76, 0);
+    const blobGeo = new T.CircleGeometry(1.1, 18); blobGeo.rotateX(-Math.PI / 2);
     const headMat = new T.MeshLambertMaterial({ color: 0xf0c79e, emissive: 0x3a2a1e });
     const blobMat = new T.MeshBasicMaterial({ color: 0x223028, transparent: true, opacity: 0.5, depthWrite: false });
     const N = 11;
@@ -2954,14 +2954,14 @@
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
     ballShadow.scale.setScalar(0.6); scene.add(ballShadow);
     // indicator rings + chevron
-    const ringGeo = new T.RingGeometry(0.85, 1.22, 30); ringGeo.rotateX(-Math.PI / 2);
+    const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9, depthWrite: false })); scene.add(activeRing);
     const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
-    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.6, 1.6, 1); scene.add(chevron);
+    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.85, 1.85, 1); scene.add(chevron);
     // aim guide — line on the pitch + a target ring (mirrors the 2D shoot/pass hints)
     const aimGeo = new T.BufferGeometry(); aimGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(6), 3));
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
-    const aimRingGeo = new T.RingGeometry(0.55, 0.95, 24); aimRingGeo.rotateX(-Math.PI / 2);
+    const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
     R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
     refresh3DKits();

@@ -2808,7 +2808,7 @@
   function render() {
     // 3D path (only when toggled on AND fully loaded); any failure reverts to the untouched 2D body below
     if (game.settings.gfx === '3D' && R3D && R3D.ready) {
-      try { render3D(); measureGfx(); return; } catch (e) { failTo2D('3D error — back to 2D'); }
+      try { render3D(); return; } catch (e) { failTo2D('3D error — back to 2D'); }   // only a real crash reverts; slowness is the player's call
     }
     if (!ctx || !geom) return;
     ctx.clearRect(0, 0, 600, 600);
@@ -2931,9 +2931,9 @@
     };
     buildGoal(-CFG.PL / 2, -1); buildGoal(CFG.PL / 2, 1);
     // shared geometries
-    const bodyGeo = new T.CapsuleGeometry(0.48, 1.15, 5, 10); bodyGeo.translate(0, 1.05, 0);
-    const headGeo = new T.SphereGeometry(0.34, 12, 10); headGeo.translate(0, 2.0, 0);
-    const blobGeo = new T.CircleGeometry(0.72, 16); blobGeo.rotateX(-Math.PI / 2);
+    const bodyGeo = new T.CapsuleGeometry(0.62, 1.3, 6, 12); bodyGeo.translate(0, 1.27, 0);
+    const headGeo = new T.SphereGeometry(0.46, 14, 12); headGeo.translate(0, 2.42, 0);
+    const blobGeo = new T.CircleGeometry(0.95, 18); blobGeo.rotateX(-Math.PI / 2);
     const headMat = new T.MeshLambertMaterial({ color: 0xf0c79e, emissive: 0x3a2a1e });
     const blobMat = new T.MeshBasicMaterial({ color: 0x223028, transparent: true, opacity: 0.5, depthWrite: false });
     const N = 11;
@@ -2954,11 +2954,16 @@
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
     ballShadow.scale.setScalar(0.6); scene.add(ballShadow);
     // indicator rings + chevron
-    const ringGeo = new T.RingGeometry(0.62, 0.92, 28); ringGeo.rotateX(-Math.PI / 2);
+    const ringGeo = new T.RingGeometry(0.85, 1.22, 30); ringGeo.rotateX(-Math.PI / 2);
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9, depthWrite: false })); scene.add(activeRing);
     const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
-    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.4, 1.4, 1); scene.add(chevron);
-    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, sides, dummy: new T.Object3D(), ready: true };
+    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.6, 1.6, 1); scene.add(chevron);
+    // aim guide — line on the pitch + a target ring (mirrors the 2D shoot/pass hints)
+    const aimGeo = new T.BufferGeometry(); aimGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(6), 3));
+    const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
+    const aimRingGeo = new T.RingGeometry(0.55, 0.95, 24); aimRingGeo.rotateX(-Math.PI / 2);
+    const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
+    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
     refresh3DKits();
   }
   function refresh3DKits() {
@@ -2994,15 +2999,29 @@
     const owner = playerById(b.owner);
     if (owner && !owner.isGK) { r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5); const cc = (aId === owner.id) ? '#58d6ff' : (owner.side === 'home' ? '#3ef08f' : '#ff7a45'); r.carrierRing.material.color.set(cc); }
     else r.carrierRing.visible = false;
+    updateAim3D(ap);
     r.renderer.render(r.scene, r.camera);
   }
-  function measureGfx() {
-    // rolling render-time watchdog: if 3D is sustainably too slow, fall back to 2D
-    const t = performance.now(); const w = gfxWatch;
-    if (w.last != null) { const d = t - w.last; if (d < 200) { w.acc += d; w.n++; if (w.n >= 90) { const avg = w.acc / w.n; w.acc = 0; w.n = 0; if (avg > 28 && game.settings.gfx === '3D') failTo2D('3D too slow — using 2D'); } } else { w.acc = 0; w.n = 0; } }
-    w.last = t;
+  function setAimLine3D(x0, y0, x1, y1, col) {
+    const r = R3D, pos = r.aimLine.geometry.attributes.position;
+    pos.setXYZ(0, x0 - 44, 0.08, y0 - 52.5); pos.setXYZ(1, x1 - 44, 0.08, y1 - 52.5); pos.needsUpdate = true;
+    r.aimLine.material.color.set(col);
   }
-
+  function updateAim3D(ap) {
+    const r = R3D, b = game.ball;
+    let show = false;
+    if (ap && ap.side === 'home' && b.owner === ap.id && game.phase === 'play') {
+      if (inShootRange(ap)) {
+        const tx = clamp(CFG.PW / 2 + game.steer.x * (CFG.goalHalfW - 0.4), CFG.PW / 2 - CFG.goalHalfW + 0.3, CFG.PW / 2 + CFG.goalHalfW - 0.3);
+        setAimLine3D(ap.x, ap.y, tx, 0, '#58d6ff');
+        r.aimMarker.position.set(tx - 44, 0.07, 0 - 52.5); r.aimMarker.material.color.set('#58d6ff'); show = true;
+      } else {
+        const m = homePassTarget(ap);
+        if (m) { setAimLine3D(ap.x, ap.y, m.x, m.y, '#3ef08f'); r.aimMarker.position.set(m.x - 44, 0.07, m.y - 52.5); r.aimMarker.material.color.set('#3ef08f'); show = true; }
+      }
+    }
+    r.aimLine.visible = show; r.aimMarker.visible = show;
+  }
   // a floating marker that hovers over whoever has the ball — drawn last so it's
   // always visible on top. Colour says which team: cyan = you, green = teammate, orange = opponent.
   function drawBallMarker() {

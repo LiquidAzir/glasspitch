@@ -261,6 +261,7 @@
       $('pause-score').textContent = scoreLine();
       $('sound-toggle-btn').textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
       $('touch-toggle-btn').textContent = 'Touch Controls: ' + (game.settings.touch ? 'ON' : 'OFF');
+      const wb = $('pause-watch-btn'); if (wb) wb.textContent = game.watching ? '🎮 Take Control' : '👁 Watch (AI plays)';
       renderPauseTactics();
     }
     else if (id === 'halftime') { $('ht-score').textContent = scoreLine(); renderStatGrid($('ht-stats')); }
@@ -645,7 +646,6 @@
       if (DIRV[key]) {
         recordCombo(key);
         if (game.screen !== 'match') { e.preventDefault(); return; } // combo opened pause
-        if (game.watching) exitWatch(true);                          // a swipe takes control back from the AI
         if (game.tutorial) game.tutorial.steerCount++;
         game.keys[key] = true; game.tapped[key] = true; e.preventDefault(); return;
       }
@@ -734,7 +734,9 @@
       case 'career-tab-scorers': game.career.tab = 'scorers'; renderCareer(); break;
       case 'career-tab-history': game.career.tab = 'history'; renderCareer(); break;
       case 'goto-watch': startWatchFlow(); break;
-      case 'watch-toggle': enterWatch(); resumeMatch(); break;     // hand the match to the AI and step away
+      case 'watch-toggle':                                         // menu toggle: hand off to the AI, or take control back
+        if (game.watching) { exitWatch(true); } else enterWatch();
+        resumeMatch(); break;
       case 'cup-watch': cupPlay(); enterWatch(); break;
       case 'league-watch': leaguePlay(); enterWatch(); break;
       case 'career-watch': if (game.career && !game.career.cur.done) { careerPlay(); enterWatch(); } break;
@@ -806,7 +808,7 @@
   // ============================================================
   function onPinch() {
     if (game.tutorial && game.tutorial.step === TUT_STEPS.length - 1) { finishTutorial(); return; }
-    if (game.watching) { exitWatch(true); return; }                  // pinch takes control back from the AI
+    if (game.watching) return;                                       // ignore pinch while spectating (use ↑↓↑↓ menu to take control)
     if (game.phase !== 'play') return;
     const p = playerById(game.activeId); if (!p) return;
     const b = game.ball;

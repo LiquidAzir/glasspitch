@@ -103,8 +103,53 @@
       { role:'FWD', num:7,  nx:0.20, ny:0.58 }, { role:'MID', num:10, nx:0.50, ny:0.56 },
       { role:'FWD', num:11, nx:0.80, ny:0.58 }, { role:'FWD', num:9, nx:0.50, ny:0.78 },
     ],
+    '4-1-4-1': [
+      { role:'GK',  num:1,  nx:0.50, ny:0.04 },
+      { role:'DEF', num:2,  nx:0.16, ny:0.18 }, { role:'DEF', num:5, nx:0.38, ny:0.14 },
+      { role:'DEF', num:6,  nx:0.62, ny:0.14 }, { role:'DEF', num:3, nx:0.84, ny:0.18 },
+      { role:'MID', num:4,  nx:0.50, ny:0.30 },
+      { role:'MID', num:7,  nx:0.16, ny:0.48 }, { role:'MID', num:8, nx:0.40, ny:0.44 },
+      { role:'MID', num:10, nx:0.60, ny:0.44 }, { role:'MID', num:11, nx:0.84, ny:0.48 },
+      { role:'FWD', num:9,  nx:0.50, ny:0.74 },
+    ],
+    '4-5-1': [
+      { role:'GK',  num:1,  nx:0.50, ny:0.04 },
+      { role:'DEF', num:2,  nx:0.16, ny:0.18 }, { role:'DEF', num:5, nx:0.38, ny:0.14 },
+      { role:'DEF', num:6,  nx:0.62, ny:0.14 }, { role:'DEF', num:3, nx:0.84, ny:0.18 },
+      { role:'MID', num:7,  nx:0.12, ny:0.46 }, { role:'MID', num:8, nx:0.34, ny:0.42 },
+      { role:'MID', num:4,  nx:0.50, ny:0.52 }, { role:'MID', num:10, nx:0.66, ny:0.42 },
+      { role:'MID', num:11, nx:0.88, ny:0.46 },
+      { role:'FWD', num:9,  nx:0.50, ny:0.74 },
+    ],
+    '3-5-2': [
+      { role:'GK',  num:1,  nx:0.50, ny:0.04 },
+      { role:'DEF', num:5,  nx:0.28, ny:0.15 }, { role:'DEF', num:4, nx:0.50, ny:0.12 },
+      { role:'DEF', num:6,  nx:0.72, ny:0.15 },
+      { role:'MID', num:3,  nx:0.10, ny:0.40 }, { role:'MID', num:8, nx:0.34, ny:0.44 },
+      { role:'MID', num:10, nx:0.50, ny:0.50 }, { role:'MID', num:7, nx:0.66, ny:0.44 },
+      { role:'MID', num:2,  nx:0.90, ny:0.40 },
+      { role:'FWD', num:9,  nx:0.40, ny:0.74 }, { role:'FWD', num:11, nx:0.60, ny:0.74 },
+    ],
+    '5-3-2': [
+      { role:'GK',  num:1,  nx:0.50, ny:0.04 },
+      { role:'DEF', num:3,  nx:0.10, ny:0.24 }, { role:'DEF', num:5, nx:0.30, ny:0.15 },
+      { role:'DEF', num:4,  nx:0.50, ny:0.12 }, { role:'DEF', num:6, nx:0.70, ny:0.15 },
+      { role:'DEF', num:2,  nx:0.90, ny:0.24 },
+      { role:'MID', num:8,  nx:0.28, ny:0.44 }, { role:'MID', num:10, nx:0.50, ny:0.42 },
+      { role:'MID', num:7,  nx:0.72, ny:0.44 },
+      { role:'FWD', num:9,  nx:0.40, ny:0.72 }, { role:'FWD', num:11, nx:0.60, ny:0.72 },
+    ],
+    '3-4-3': [
+      { role:'GK',  num:1,  nx:0.50, ny:0.04 },
+      { role:'DEF', num:5,  nx:0.28, ny:0.16 }, { role:'DEF', num:4, nx:0.50, ny:0.13 },
+      { role:'DEF', num:6,  nx:0.72, ny:0.16 },
+      { role:'MID', num:3,  nx:0.14, ny:0.44 }, { role:'MID', num:8, nx:0.40, ny:0.40 },
+      { role:'MID', num:10, nx:0.60, ny:0.40 }, { role:'MID', num:2, nx:0.86, ny:0.44 },
+      { role:'FWD', num:7,  nx:0.22, ny:0.66 }, { role:'FWD', num:9, nx:0.50, ny:0.74 },
+      { role:'FWD', num:11, nx:0.78, ny:0.66 },
+    ],
   };
-  const FORMATION_KEYS = ['4-3-3', '4-4-2', '4-2-3-1'];
+  const FORMATION_KEYS = ['4-3-3', '4-4-2', '4-2-3-1', '4-1-4-1', '4-5-1', '3-5-2', '5-3-2', '3-4-3'];
 
   // ============================================================
   // MATH

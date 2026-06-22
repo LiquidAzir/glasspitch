@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <div id="app">
@@ -29,6 +29,7 @@
         <div class="title-divider"></div>
         <p class="title-tagline">Holographic soccer for Meta Ray-Ban Display</p>
         <nav class="title-menu">
+          <button class="title-btn focusable primary hidden" id="title-continue" data-action="resume-saved">Continue Match</button>
           <button class="title-btn focusable" data-action="quick-match">Kick Off</button>
           <button class="title-btn focusable" data-action="goto-career">Career</button>
           <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
@@ -353,6 +354,6 @@
     </div>
 
   </div>
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

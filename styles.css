@@ -150,6 +150,8 @@ html, body {
 }
 .title-btn:focus { background: #16291f; transform: scale(1.03); }
 .title-btn.danger { color: var(--red); }
+.title-btn.primary { background: var(--grn); color: #06120b; border-color: var(--grn); box-shadow: 0 0 16px rgba(62,240,143,0.4); }
+.title-btn.primary:focus { background: #54f5a4; transform: scale(1.03); box-shadow: 0 0 22px rgba(62,240,143,0.6); }
 .title-record { z-index: 2; margin-top: 16px; color: var(--ink-3); font-size: 13px; min-height: 16px; }
 .title-hint { z-index: 2; margin-top: 6px; color: var(--ink-3); font-size: 12px; }
 

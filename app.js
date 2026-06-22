@@ -266,6 +266,7 @@
   // PERSISTENCE
   // ============================================================
   const LS = 'glasspitch_v1';
+  const LS_MATCH = 'glasspitch_match_v1';   // live match snapshot (resume after exit)
   function loadStore() {
     try {
       const s = JSON.parse(localStorage.getItem(LS) || '{}');
@@ -289,12 +290,79 @@
     } catch (e) {}
   }
 
+  // ----- live match snapshot: lets you exit mid-match and continue later -----
+  function serializeMatch() {
+    if (!game.home || !game.away || !game.ball || !game.stats) return null;
+    if (game.matchMode === 'tutorial' || game.phase === 'ended') return null;
+    const serTeam = (t) => ({ teamId: t.teamId, side: t.side, score: t.score, formKey: t.formKey,
+      players: t.players.map(p => ({ ...p })) });             // players are all primitives → plain copy
+    return {
+      v: 2,
+      home: serTeam(game.home), away: serTeam(game.away),
+      ball: { ...game.ball, trail: game.ball.trail ? game.ball.trail.slice() : [] },
+      clockSec: game.clockSec, half: game.half, phase: game.phase, phaseT: game.phaseT || 0,
+      matchMode: game.matchMode || 'friendly', kickoffTeam: game.kickoffTeam,
+      activeId: game.activeId, activeLockT: game.activeLockT || 0,
+      lastTouch: game.lastTouch, lastKicker: game.lastKicker, lastTouchPlayer: game.lastTouchPlayer,
+      concede: game._concede || null, lastWasShot: !!game._lastWasShot,
+      poss: { home: game.poss.home, away: game.poss.away },
+      stats: { shots: { ...game.stats.shots }, sot: { ...game.stats.sot }, fouls: { ...game.stats.fouls } },
+    };
+  }
+  function restoreMatch(snap) {
+    try {
+      if (!snap || snap.v !== 2 || !snap.home || !snap.away) return false;
+      const rebuild = (sd) => ({
+        teamId: sd.teamId, side: sd.side, def: teamById(sd.teamId), score: sd.score || 0,
+        formKey: sd.formKey, form: FORMATIONS[sd.formKey] || FORMATIONS['4-3-3'],
+        players: sd.players.map(p => ({ ...p })),
+      });
+      game.home = rebuild(snap.home);
+      game.away = rebuild(snap.away);
+      game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [], ...snap.ball };
+      if (!Array.isArray(game.ball.trail)) game.ball.trail = [];
+      game.clockSec = snap.clockSec || 0; game.half = snap.half || 1;
+      game.phase = (snap.phase === 'goal' || snap.phase === 'restart') ? 'play' : (snap.phase || 'play');
+      game.phaseT = 0;
+      game.matchMode = snap.matchMode || 'friendly'; game.kickoffTeam = snap.kickoffTeam || 'away';
+      game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
+      game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
+      game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot;
+      game.poss = (snap.poss && typeof snap.poss.home === 'number') ? { home: snap.poss.home, away: snap.poss.away } : { home: 1, away: 1 };
+      game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
+      game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
+      game.steer = { x: 0, y: 0 }; game.lastSteerT = -10; game.keys = {}; game.tapped = {};
+      game.tutorial = null; game.dashCdUntil = 0;
+      setupPitchGeom(); drawStaticPitch(); paintScoreboard();
+      _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
+      game.history = [snap.matchMode === 'cup' ? 'cup' : snap.matchMode === 'league' ? 'league' : snap.matchMode === 'career' ? 'career' : 'title'];
+      return true;
+    } catch (e) { return false; }
+  }
+  function saveMatch() { try { const s = serializeMatch(); if (s) localStorage.setItem(LS_MATCH, JSON.stringify(s)); } catch (e) {} }
+  function clearMatch() { try { localStorage.removeItem(LS_MATCH); } catch (e) {} }
+  function loadMatchSnap() { try { const s = localStorage.getItem(LS_MATCH); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+  function hasSavedMatch() { const s = loadMatchSnap(); return !!(s && s.v === 2 && s.home && s.away); }
+
   // ============================================================
   // TITLE / SETTINGS / TEAM SELECT UI
   // ============================================================
   function renderTitle() {
     const r = game.record;
     $('title-record').textContent = (r.w + r.d + r.l) ? `Record  ${r.w}W · ${r.d}D · ${r.l}L` : '';
+    // show a Continue button only when there's a saved in-progress match
+    const cont = $('title-continue');
+    if (cont) {
+      const snap = loadMatchSnap();
+      const has = !!(snap && snap.v === 2 && snap.home && snap.away);
+      cont.classList.toggle('hidden', !has);
+      if (has) {
+        const hc = teamById(snap.home.teamId).code, ac = teamById(snap.away.teamId).code;
+        const mins = Math.min(90, Math.floor((snap.clockSec || 0) / 60));
+        const tag = (snap.matchMode && snap.matchMode !== 'friendly') ? snap.matchMode[0].toUpperCase() + snap.matchMode.slice(1) + ' · ' : '';
+        cont.textContent = `▶ Continue · ${tag}${hc} ${snap.home.score}–${snap.away.score} ${ac}  ${mins}'`;
+      }
+    }
   }
   function renderSettings() {
     $('opt-difficulty').textContent = game.settings.difficulty;
@@ -391,9 +459,9 @@
     return { x, y };
   }
 
-  function startMatch(homeId, awayId) {
+  function startMatch(homeId, awayId, mode) {
     _seed = (Date.now() & 0x7fffffff) ^ 0x9e3779b9;
-    game.matchMode = 'friendly';   // cup/league callers override this after starting
+    game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
@@ -409,6 +477,7 @@
     saveStore();
     navigateTo('match', { addToHistory: false });
     game.history = ['title'];
+    saveMatch();                                   // make the fresh match resumable straight away
     SFX.whistle(); say(`Kick off — ${game.home.def.name} v ${game.away.def.name}.`);
   }
 
@@ -573,13 +642,14 @@
     p.dashT = CFG.dashDur; game.dashCdUntil = now + CFG.dashCd * 1000;
     SFX.dash();
   }
-  function pauseMatch() { if (game.tutorial) { finishTutorial(); return; } if (game.phase === 'ended') return; navigateTo('pause'); }
+  function pauseMatch() { if (game.tutorial) { finishTutorial(); return; } if (game.phase === 'ended') return; saveMatch(); navigateTo('pause'); }
 
   // ============================================================
   // ACTIONS (menu dispatch)
   // ============================================================
   function handleAction(action, el) {
     switch (action) {
+      case 'resume-saved': { const snap = loadMatchSnap(); if (snap && restoreMatch(snap)) navigateTo('match', { addToHistory:false }); else { clearMatch(); renderTitle(); } break; }
       case 'quick-match': {
         const you = game.ts.you || TEAMS[0].id;
         let opp = game.ts.opp; if (!opp || opp === you) { let i; do { i = Math.floor(srand()*TEAMS.length); } while (TEAMS[i].id===you); opp = TEAMS[i].id; }
@@ -615,9 +685,9 @@
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
       case 'resume': resumeMatch(); break;
       case 'resume-second': startSecondHalf(); break;
-      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId); game.matchMode = m; if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; break; }
+      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
-      case 'quit-title': game.history = []; navigateTo('title', { addToHistory:false }); break;
+      case 'quit-title': saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
     }
   }
   function cycle(key, vals) {
@@ -638,6 +708,7 @@
     game.half = 2; game.clockSec = HALF_SIM; game.phase = 'play';
     game.kickoffTeam = 'home';
     resetPositions('home', true);
+    saveMatch();
     resumeMatch();
     SFX.whistle(); say('Second half under way.');
   }
@@ -653,6 +724,9 @@
     const youHaveBall = b.owner != null && playerById(b.owner) && playerById(b.owner).side === 'home';
     if (youHaveBall && b.owner === p.id) {
       if (inShootRange(p)) doShoot(p); else doPass(p);
+    } else if (youHaveBall) {
+      // teammate has the ball — switch to them so you can pass/shoot
+      setActive(b.owner, true);
     } else if (dist(p, b) < CFG.tackleR) {
       doTackle(p);
     } else {
@@ -773,6 +847,18 @@
     // tutorial: the tackle-target opponent stands still holding the ball (clear, easy lesson)
     if (game.tutorial && game.tutorial.dribbleOppId === p.id) { mvx = 0; mvy = 0; }
 
+    // Prevent carriers from dribbling toward their own goal (own-goals feel awful).
+    // Respect explicit user steering — only clamp auto-momentum / AI movement.
+    if (b.owner === p.id) {
+      const attackUp = p.side === 'home';
+      const backward = attackUp ? mvy > 0.05 : mvy < -0.05;
+      const userSteering = isActive && (performance.now() / 1000 - game.lastSteerT) < CFG.steerHold;
+      if (backward && !userSteering) {
+        mvy = 0;
+        if (Math.abs(mvx) < 0.1) mvy = attackUp ? -0.3 : 0.3;  // nudge forward
+      }
+    }
+
     // Momentum-aware steering: rotate the velocity toward the desired direction
     // (curved turns) and ease the speed — feels fluid instead of snapping.
     const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;
@@ -820,7 +906,7 @@
       for (let j = i + 1; j < ps.length; j++) {
         const c = ps[j];
         // let a challenger get right up against the carrier (so tackling/pressure still works)
-        const minD = (a.id === owner || c.id === owner) ? 1.0 : 1.65;
+        const minD = (a.id === owner || c.id === owner) ? 1.0 : 2.4;
         let dx = c.x - a.x, dy = c.y - a.y, d2 = dx*dx + dy*dy;
         if (d2 >= minD*minD) continue;
         let d = Math.sqrt(d2), ux, uy;
@@ -855,7 +941,15 @@
     if (haveBall) {
       // you fully steer the dribble; default forward (up) if you never steered
       if (game.steer.x || game.steer.y) { dx = game.steer.x; dy = game.steer.y; }
-      else { dx = Math.cos(p.heading); dy = Math.sin(p.heading); }   // keep momentum
+      else {
+        dx = Math.cos(p.heading); dy = Math.sin(p.heading);
+        // Prevent momentum from carrying the dribble toward own goal
+        const attackUp = p.side === 'home';
+        if ((attackUp && dy > 0) || (!attackUp && dy < 0)) {
+          dy = 0;
+          if (Math.abs(dx) < 0.1) { dx = 0; dy = attackUp ? -1 : 1; } // default forward
+        }
+      }
     } else if (steering) {
       dx = game.steer.x; dy = game.steer.y;
     } else {
@@ -916,14 +1010,14 @@
       dx = tx - p.x; dy = ty - p.y;
     }
 
-    // separation from nearby teammates (wider + stronger → defenders spread out, less clumping)
+    // separation from nearby teammates (wider + stronger → players spread out, less clumping)
     let sx = 0, sy = 0;
     for (const q of team.players) {
       if (q === p || q.isGK) continue;
       const d2 = dist2(p.x, p.y, q.x, q.y);
-      if (d2 < 38 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (6.2 - d); sy += (p.y - q.y)/d * (6.2 - d); }
+      if (d2 < 81 && d2 > 0.001) { const d = Math.sqrt(d2); sx += (p.x - q.x)/d * (9 - d); sy += (p.y - q.y)/d * (9 - d); }
     }
-    dx += sx * 0.85; dy += sy * 0.85;
+    dx += sx * 0.95; dy += sy * 0.95;
 
     const n = len(dx, dy);
     if (n < 0.3) return { x: 0, y: 0, sprint: 0.0 };
@@ -1118,7 +1212,9 @@
       const base = 0.45 + (teamObj(p.side).def.r.DEF/100 - 0.6) * 0.6;
       const prob = game.tutorial ? 1 : clamp(base * (p.side === 'home' ? 1 : diff.tackle), 0.15, 0.9);
       if (srand() < prob) {
-        b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; game.lastTouch = p.side; game.lastKicker = null; game.lastTouchPlayer = p.id; game._lastWasShot = false;
+        b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
+        _prevBall.x = b.x; _prevBall.y = b.y;
+        game.lastTouch = p.side; game.lastKicker = null; game.lastTouchPlayer = p.id; game._lastWasShot = false;
         spawnEffect('win', p.x, p.y);
         if (p.side === 'home') { setActive(p.id, true); say(pick(['Won it back!', 'Great tackle!', 'Dispossessed!'])); }
       } else if (srand() < 0.12) {
@@ -1128,7 +1224,9 @@
         freeKick(carrier.side, p.x, p.y);
       }
     } else if (b.owner == null && dist(p, b) < CFG.captureR + 0.5) {
-      b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; game.lastTouch = p.side; game.lastTouchPlayer = p.id;
+      b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
+      _prevBall.x = b.x; _prevBall.y = b.y;
+      game.lastTouch = p.side; game.lastTouchPlayer = p.id;
       if (p.side==='home') setActive(p.id, true);
     }
   }
@@ -1158,9 +1256,10 @@
   function knockLoose(carrier, presser) {
     const b = game.ball;
     const dx = presser.x - carrier.x, dy = presser.y - carrier.y, n = len(dx, dy) || 1;
-    b.owner = null; b.shot = false; b.z = 0; b.vz = 0;
+    b.owner = null; b.shot = false; b.z = 0; b.vz = 0; b.trail.length = 0;
     const sp = rrange(3.5, 6.5);
     b.vx = dx/n * sp + rrange(-2, 2); b.vy = dy/n * sp + rrange(-2, 2);
+    _prevBall.x = b.x; _prevBall.y = b.y;
     game.lastTouch = presser.side; game.lastTouchPlayer = presser.id;
     game.lastKicker = carrier.id; carrier.kickCd = 0.4;   // carrier can't instantly re-grab the loose ball
     presser.tackleCd = 0.5;
@@ -1213,7 +1312,9 @@
     }
     if (best) {
       b.owner = best.id; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.shot = false;
+      b.trail.length = 0;
       game.lastTouch = best.side; game.lastKicker = null; game.lastTouchPlayer = best.id; game._lastWasShot = false;
+      _prevBall.x = b.x; _prevBall.y = b.y;
       if (best.side === 'home' && best.id !== game.activeId) setActive(best.id, false);
     }
   }
@@ -1248,9 +1349,15 @@
       const reach = 1.9 + (teamObj(side).def.r.GK/100 - 0.7) * 2.4;   // better keepers dive further
       if (inArea && dist(gk, b) < reach && !(game.lastKicker === gk.id && gk.kickCd > 0)) {
         const wasShot = game._lastWasShot && len(b.vx, b.vy) > 9;
-        b.owner = gk.id; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.shot = false;
+        b.owner = gk.id; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
+        _prevBall.x = b.x; _prevBall.y = b.y;
         game.lastTouch = side; game.lastTouchPlayer = gk.id; game._lastWasShot = false; gk.kickCd = 0;
-        if (wasShot) { SFX.save(); spawnEffect('win', gk.x, gk.y); say(pick(['What a save!', 'The keeper denies them!', 'Brilliant stop!', 'Saved!'])); }
+        if (wasShot) {
+          SFX.save(); spawnEffect('win', gk.x, gk.y);
+          say(side === 'home'
+            ? pick(['Great save by your keeper!', 'Tipped away!', 'Brilliant stop!', 'Saved! Keeps you in it.'])
+            : pick(['What a save!', 'The keeper denies you!', 'Denied!', 'Good save, that was well struck.']));
+        }
         keeperDistribute(gk, side);
       }
     }
@@ -1367,7 +1474,12 @@
     if (hs === as) state = `level at ${hs}–${as}`;
     else { const ld = hs > as ? game.home.def : game.away.def; state = `${ld.name} lead ${Math.max(hs,as)}–${Math.min(hs,as)}`; }
     const who = scorer ? `#${scorer.num} ${teamObj(scorer.side).def.code}` : '';
-    say((ownGoal ? 'Own goal! ' : 'GOAL! ') + (who ? who + ' — ' : '') + state + '.');
+    // late drama
+    const min = Math.floor(game.clockSec / 60);
+    const late = min >= 80;
+    let prefix = ownGoal ? 'Own goal! ' : 'GOAL! ';
+    if (late && !ownGoal) prefix = pick(['LATE GOAL! ', 'DRAMA! ']);
+    say(prefix + (who ? who + ' — ' : '') + state + '.');
   }
   function pitchPunch() { const el = $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }
 
@@ -1399,6 +1511,7 @@
     const x = lr === 'L' ? 1 : CFG.PW - 1;
     const y = topGoal ? 1 : CFG.PL - 1;
     restartAt(toSide, x, y, 'Corner', true);
+    say(toSide === 'home' ? pick(['Corner for you — chance here.', 'Swinging it in from the corner.']) : pick(['Corner to the opposition.', 'Defending a corner now.']));
   }
   function freeKick(toSide, x, y) { restartAt(toSide, x, y, 'Free kick', true); }
 
@@ -1408,6 +1521,7 @@
   function goHalftime() { game.phase = 'play'; SFX.whistle(); navigateTo('halftime'); }
   function goFulltime() {
     game.phase = 'ended';
+    clearMatch();                                  // match over — no longer resumable
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
@@ -1425,11 +1539,19 @@
   function strengthOf(id) { const r = teamById(id).r; return r.ATT*0.3 + r.MID*0.25 + r.DEF*0.25 + r.PAC*0.1 + r.GK*0.1; }
   function poisson(lam) { const L = Math.exp(-lam); let k = 0, p = 1; do { k++; p *= srand(); } while (p > L); return k - 1; }
   function simWinner(aId, bId) {
+    // knockout — no draws allowed
     const sa = strengthOf(aId), sb = strengthOf(bId);
     const pa = 1 / (1 + Math.pow(10, (sb - sa) / 12));
     let ga = poisson(0.8 + pa*1.6), gb = poisson(0.8 + (1-pa)*1.6);
-    if (ga === gb) { if (srand() < pa) ga++; else gb++; }   // knockout — no draws
+    if (ga === gb) { if (srand() < pa) ga++; else gb++; }
     return { winner: ga > gb ? aId : bId, score: [ga, gb] };
+  }
+  function simMatch(aId, bId) {
+    // league / career — draws are allowed (realistic table results)
+    const sa = strengthOf(aId), sb = strengthOf(bId);
+    const pa = 1 / (1 + Math.pow(10, (sb - sa) / 12));
+    const ga = poisson(0.8 + pa*1.6), gb = poisson(0.8 + (1-pa)*1.6);
+    return { score: [ga, gb] };
   }
   function roundName(n) { return n >= 8 ? 'Quarter-finals' : n === 4 ? 'Semi-finals' : n === 2 ? 'Final' : 'Champion'; }
 
@@ -1455,8 +1577,8 @@
   function cupPlay() {
     const c = game.cup; if (!c || !c.alive || c.champion) return;
     const opp = cupOpponent(); if (!opp) return;
-    startMatch(c.you, opp);
-    game.matchMode = 'cup'; game.history = ['cup'];
+    startMatch(c.you, opp, 'cup');
+    game.history = ['cup'];
   }
   function onCupMatchEnd() {
     const hs = game.home.score, as = game.away.score;
@@ -1716,8 +1838,8 @@
     const lg = game.league; if (!lg || lg.done) return;
     const f = leagueFixtureForYou(); if (!f || lg.results[lg.round][f.idx]) return;
     const opp = f.pair[0] === lg.you ? f.pair[1] : f.pair[0];
-    startMatch(lg.you, opp);
-    game.matchMode = 'league'; game.history = ['league'];
+    startMatch(lg.you, opp, 'league');
+    game.history = ['league'];
   }
   function onLeagueMatchEnd() {
     const lg = game.league, f = leagueFixtureForYou();
@@ -1726,7 +1848,7 @@
     const rd = lg.fixtures[lg.round];
     for (let i = 0; i < rd.length; i++) {
       if (i === f.idx || lg.results[lg.round][i]) continue;
-      lg.results[lg.round][i] = simWinner(rd[i][0], rd[i][1]).score;
+      lg.results[lg.round][i] = simMatch(rd[i][0], rd[i][1]).score;
     }
     let msg;
     if (lg.round >= lg.fixtures.length - 1) {
@@ -1908,8 +2030,8 @@
     const c = game.career; if (!c || c.cur.done) return;
     const f = careerFixtureForYou(); if (!f || c.cur.results[c.cur.round][f.idx]) return;
     const opp = f.pair[0] === c.team ? f.pair[1] : f.pair[0];
-    startMatch(c.team, opp);
-    game.matchMode = 'career'; game.history = ['career'];
+    startMatch(c.team, opp, 'career');
+    game.history = ['career'];
   }
   function careerAdvance() {
     const c = game.career; if (!c) return;
@@ -1940,7 +2062,7 @@
     const rd = cur.fixtures[cur.round];
     for (let i = 0; i < rd.length; i++) {
       if (i === f.idx || cur.results[cur.round][i]) continue;
-      const r = simWinner(rd[i][0], rd[i][1]);
+      const r = simMatch(rd[i][0], rd[i][1]);
       cur.results[cur.round][i] = r.score;
       distributeGoals(rd[i][0], r.score[0]); distributeGoals(rd[i][1], r.score[1]);
     }
@@ -2054,6 +2176,16 @@
   }
   function wx(x) { return geom.ox + x * geom.s; }
   function wy(y) { return geom.oy + y * geom.s; }
+  // shared figure radius (smaller, less arcade-inflated → the pitch feels less crowded
+  // and passing lanes open up). The active player you control is drawn a touch bigger.
+  function playerBodyR(p) {
+    const s = geom.s;
+    const r = p.isGK ? 2.7 : 2.5;
+    let bodyR = Math.max(5.5, r * s * 0.40 + 2.6);
+    const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
+    if (isActive) bodyR *= 1.18;
+    return bodyR;
+  }
 
   function drawStaticPitch() {
     const g = geom, p = pitchCtx;
@@ -2170,10 +2302,8 @@
   function drawBallMarker() {
     const c = playerById(game.ball.owner);
     if (!c) return;
-    const s = geom.s;
     const isActive = c.id === game.activeId && c.side === 'home' && !game._allAI;
-    let bodyR = Math.max(6.5, (c.isGK ? 3.3 : 3.0) * s * 0.46 + 3.5);
-    if (isActive) bodyR *= 1.2;
+    const bodyR = playerBodyR(c);
     const sx = wx(c.x), sy = wy(c.y);
     const col = isActive ? '#58d6ff' : (c.side === 'home' ? '#3ef08f' : '#ff6a3d');
     const bob = Math.sin(performance.now() / 170) * 2.2;
@@ -2261,9 +2391,7 @@
     const col = p.isGK ? t.gk : t.col;
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
     const hasBall = game.ball.owner === p.id;
-    const r = p.isGK ? 3.3 : 3.0;
-    let bodyR = Math.max(6.5, r * s * 0.46 + 3.5);
-    if (isActive) bodyR *= 1.2;                      // the player you control clearly stands out
+    const bodyR = playerBodyR(p);                    // smaller figures → less crowded, active player stands out
 
     // dash trail
     if (isActive && p.dashT > 0) {
@@ -2347,42 +2475,75 @@
     }
   }
 
+  // hi-vis glow colour for the ball — bright & warm so it pops off the pitch and any kit.
+  // (One-line tweak if you ever want a different ball colour.)
+  const BALL_GLOW = '#ffd23f';
   function drawBall() {
     const b = game.ball;
     const z = b.z || 0;
-    // trail (ground)
+    // trail (ground) — tinted to match the ball glow so the path is easy to follow
     if (b.trail.length > 4) {
       for (let i = 0; i < b.trail.length - 2; i += 2) {
-        const a = (i / b.trail.length) * 0.4;
-        ctx.fillStyle = `rgba(255,255,255,${a})`;
-        ctx.beginPath(); ctx.arc(wx(b.trail[i]), wy(b.trail[i+1]), 2, 0, 6.2832); ctx.fill();
+        const a = (i / b.trail.length) * 0.42;
+        ctx.fillStyle = hexA(BALL_GLOW, a);
+        ctx.beginPath(); ctx.arc(wx(b.trail[i]), wy(b.trail[i+1]), 2.4, 0, 6.2832); ctx.fill();
       }
     }
     const sx = wx(b.x), sy = wy(b.y);
-    const zPix = z * geom.s * 2.2;               // exaggerated so the arc reads on a small pitch
-    const R = Math.max(7, geom.s * 1.05) * (1 + z * 0.09);   // big & bright so it's easy to track
+    const zPix = z * geom.s * 2.2;                              // exaggerated so the arc reads on a small pitch
+    const R = Math.max(9.5, geom.s * 1.32) * (1 + z * 0.09);    // bigger & bolder so it's unmistakable
+    const by = sy - zPix;
     // ground shadow (shrinks & fades as the ball rises)
     const sh = clamp(1 - z * 0.14, 0.3, 1);
     ctx.fillStyle = `rgba(0,0,0,${0.45 * sh})`;
     ctx.beginPath(); ctx.ellipse(sx, sy + R*0.5, R*0.95*sh, R*0.42*sh, 0, 0, 6.2832); ctx.fill();
-    // lifted ball with a soft glow halo so you never lose it
-    const by = sy - zPix;
+
+    // pulsing hi-vis halo — the ball always glows so you can pick it out from the players
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 170);
     ctx.save();
-    ctx.shadowColor = 'rgba(255,255,255,0.9)'; ctx.shadowBlur = 13;
-    const g = ctx.createRadialGradient(sx - R*0.3, by - R*0.3, R*0.2, sx, by, R);
-    g.addColorStop(0, '#ffffff'); g.addColorStop(0.72, '#eef5f0'); g.addColorStop(1, '#b3c6bb');
+    const halo = ctx.createRadialGradient(sx, by, R*0.55, sx, by, R*2.2);
+    halo.addColorStop(0, hexA(BALL_GLOW, 0.42 + 0.20*pulse));
+    halo.addColorStop(0.55, hexA(BALL_GLOW, 0.14));
+    halo.addColorStop(1, hexA(BALL_GLOW, 0));
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(sx, by, R*2.2, 0, 6.2832); ctx.fill();
+    ctx.restore();
+
+    // white sphere body with soft 3-D shading + a warm bloom
+    ctx.save();
+    ctx.shadowColor = hexA(BALL_GLOW, 0.85); ctx.shadowBlur = 14;
+    const g = ctx.createRadialGradient(sx - R*0.34, by - R*0.36, R*0.2, sx, by, R);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#f3f8ff'); g.addColorStop(1, '#cdd9e4');
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(sx, by, R, 0, 6.2832); ctx.fill();
     ctx.restore();
-    // rolling seam (rotates as the ball travels) + center, so it reads as spinning
+
+    // classic soccer-ball panels: a centre pentagon, seams to the rim, and dark caps
+    // between them (rotates as the ball travels, so it reads as spinning)
     ctx.save();
-    ctx.translate(sx, by); ctx.rotate((b.x + b.y) * 0.6);
-    ctx.strokeStyle = 'rgba(22,32,26,0.55)'; ctx.lineWidth = Math.max(1, R*0.16);
-    ctx.beginPath(); ctx.arc(0, 0, R*0.6, 0.45, Math.PI - 0.45); ctx.stroke();
-    ctx.beginPath(); ctx.arc(0, 0, R*0.6, Math.PI + 0.45, 2*Math.PI - 0.45); ctx.stroke();
+    ctx.translate(sx, by); ctx.rotate((b.x + b.y) * 0.22);
+    const dark = 'rgba(18,30,52,0.92)';
+    const TAU5 = 1.25664, TOP = -1.5708;                        // 2π/5, start at the top
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) { const a = TOP + i*TAU5; const px = Math.cos(a)*R*0.40, py = Math.sin(a)*R*0.40; i ? ctx.lineTo(px,py) : ctx.moveTo(px,py); }
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, R*0.11); ctx.lineCap = 'round';
+    for (let i = 0; i < 5; i++) {
+      const a = TOP + i*TAU5;
+      ctx.beginPath(); ctx.moveTo(Math.cos(a)*R*0.40, Math.sin(a)*R*0.40); ctx.lineTo(Math.cos(a)*R*0.96, Math.sin(a)*R*0.96); ctx.stroke();
+      const ca = a + TAU5/2;                                    // dark panel cap at the rim, between seams
+      ctx.beginPath(); ctx.arc(Math.cos(ca)*R*0.82, Math.sin(ca)*R*0.82, R*0.15, 0, 6.2832); ctx.fill();
+    }
     ctx.restore();
-    ctx.fillStyle = 'rgba(22,32,26,0.8)';
-    ctx.beginPath(); ctx.arc(sx, by, R*0.26, 0, 6.2832); ctx.fill();
+
+    // crisp dark outline (separates the ball from white-kitted players) + bright accent rim
+    ctx.save();
+    ctx.strokeStyle = 'rgba(16,26,44,0.92)'; ctx.lineWidth = Math.max(1.2, R*0.12);
+    ctx.beginPath(); ctx.arc(sx, by, R, 0, 6.2832); ctx.stroke();
+    ctx.strokeStyle = hexA(BALL_GLOW, 0.6 + 0.4*pulse); ctx.lineWidth = Math.max(1, R*0.09);
+    ctx.beginPath(); ctx.arc(sx, by, R*0.93, 0, 6.2832); ctx.stroke();
+    ctx.restore();
   }
 
   function drawFx() {
@@ -2437,7 +2598,8 @@
       const have = b.owner === p.id;
       const attackingPhase = (b.owner != null && playerById(b.owner) && playerById(b.owner).side === 'home');
       if (have && inShootRange(p)) { mode = 'shoot'; icon = '◎'; label = 'SHOOT'; }
-      else if (have || attackingPhase) { mode = 'pass'; icon = '▸'; label = 'PASS'; }
+      else if (have) { mode = 'pass'; icon = '▸'; label = 'PASS'; }
+      else if (attackingPhase) { mode = 'switch'; icon = '⟳'; label = 'SWITCH'; }  // switch to carrier
       else if (dist(p, b) < CFG.tackleR) { mode = 'tackle'; icon = '✕'; label = 'TACKLE'; }
       else { mode = 'switch'; icon = '⟳'; label = 'SWITCH'; }
     }
@@ -2499,6 +2661,8 @@
       update(dt);
       render();
       if ((game.hudT += dt) > 1 / CFG.hudHz) { game.hudT = 0; updateHud(); }
+      // auto-save the live match every couple of seconds so an exit never loses progress
+      if ((game.saveT = (game.saveT || 0) + dt) > 2 && game.phase !== 'ended' && game.matchMode !== 'tutorial') { game.saveT = 0; saveMatch(); }
     }
     if (game.running) game.rafId = requestAnimationFrame(frame);
   }
@@ -2536,6 +2700,7 @@
       pen: () => game.penalty,
       penFast: (v) => { game._penFast = !!v; },
       penKick: (dir) => { penInput(dir || 'ArrowUp'); penInput('Enter'); },
+      saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
       render,
     };
   }

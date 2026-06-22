@@ -285,7 +285,7 @@
       // goal banner / pitch punch (CSS keyframe animations restart on display)
       const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
       const pc = $('pitch'); if (pc) pc.classList.remove('punch');
-      render(); updateHud(true);
+      updateHudLayout(); render(); updateHud(true);
     }
   }
 
@@ -2831,14 +2831,14 @@
   const THREE_URL = './three.module.js?v=22';
   function toggleGfx() {
     game.settings.gfx = game.settings.gfx === '3D' ? '2D' : '3D';
-    saveStore(); renderSettings();
+    saveStore(); renderSettings(); updateHudLayout();
     if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false);
   }
   // 3D camera presets — selectable in Settings. Side = fixed side-on broadcast (default,
   // equidistant goals); Behind = the original elevated behind-the-near-goal view.
   const CAM_PRESETS = {
     Side: { fov: 49, pos: [-100, 74, 0], look: [0, -1, 0] },
-    Behind: { fov: 39, pos: [0, 104, 140], look: [0, 0, -6] },
+    Behind: { fov: 44, pos: [0, 90, 116], look: [0, 0, 4] },   // zoomed in — chip rides up to the top band (cam-behind HUD), freeing the bottom
   };
   function applyCam() {
     if (!R3D || !R3D.ready) return;
@@ -2850,8 +2850,14 @@
   }
   function toggleCam() {
     game.settings.cam = game.settings.cam === 'Side' ? 'Behind' : 'Side';
-    saveStore(); renderSettings(); applyCam();
+    saveStore(); renderSettings(); applyCam(); updateHudLayout();
     if (game.settings.gfx === '3D' && R3D && R3D.ready) render();   // live update if 3D is showing
+  }
+  // In the 3D Behind-the-net view we lift the action chip + dash pip into the empty band
+  // below the scoreboard (CSS class) so the camera can drop lower and zoom into the field.
+  function updateHudLayout() {
+    const m = $('match');
+    if (m) m.classList.toggle('cam-behind', game.settings.gfx === '3D' && game.settings.cam === 'Behind');
   }
   function showPitch3D(on) {
     if (cv3d) cv3d.classList.toggle('hidden', !on);
@@ -2860,7 +2866,7 @@
   function failTo2D(msg) {
     game.settings.gfx = '2D';
     try { saveStore(); renderSettings(); } catch (e) {}
-    showPitch3D(false);
+    showPitch3D(false); updateHudLayout();
     if (cv) cv.classList.remove('hidden');
     if (msg) { showToast(msg); say(msg); }
   }
@@ -3516,8 +3522,8 @@
       saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
       watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
       sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
-      gfx: (v) => { game.settings.gfx = v || '3D'; if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
-      cam: (v) => { game.settings.cam = v || 'Side'; applyCam(); render(); }, toggleCam: () => toggleCam(),
+      gfx: (v) => { game.settings.gfx = v || '3D'; updateHudLayout(); if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
+      cam: (v) => { game.settings.cam = v || 'Side'; applyCam(); updateHudLayout(); render(); }, toggleCam: () => toggleCam(),
       setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
       spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },

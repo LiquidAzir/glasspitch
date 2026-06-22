@@ -282,6 +282,10 @@ html, body {
   position: absolute; bottom: 7px; left: 0; right: 0;
   display: flex; justify-content: center;
 }
+/* 3D Behind-the-net: lift the action chip + dash pip into the band just below the
+   scoreboard so the camera can drop lower and zoom into the field. */
+#match.cam-behind .action-row { bottom: auto; top: 56px; }
+#match.cam-behind .dash-pip { bottom: auto; top: 54px; }
 .action-chip {
   display: flex; align-items: center; gap: 9px;
   background: rgba(8, 16, 12, 0.85);

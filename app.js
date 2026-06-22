@@ -319,6 +319,7 @@
       });
       game.home = rebuild(snap.home);
       game.away = rebuild(snap.away);
+      assignKitColors();
       game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [], ...snap.ball };
       if (!Array.isArray(game.ball.trail)) game.ball.trail = [];
       game.clockSec = snap.clockSec || 0; game.half = snap.half || 1;
@@ -433,6 +434,26 @@
   function pickInk(h) { return lum(h) > 0.6 ? '#0b1410' : '#ffffff'; }
   function shade(h, amt) { const c = hexToRgb(h); const f = (v) => clamp(Math.round(v + 255*amt), 0, 255); return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`; }
   function hexA(h, a) { const c = hexToRgb(h); return `rgba(${c.r},${c.g},${c.b},${a})`; }
+  // perceptual-ish colour distance (0..~765) for detecting kit clashes
+  function colorDist(a, b) {
+    const x = hexToRgb(a), y = hexToRgb(b);
+    const dr = x.r - y.r, dg = x.g - y.g, db = x.b - y.b;
+    return Math.sqrt(2*dr*dr + 4*dg*dg + 3*db*db);
+  }
+  const KIT_BEACONS = ['#ff4d5e','#3a8cff','#ffd23f','#36e07a','#5fe0ff','#b974ff','#ff8a3a','#ffffff','#ff5fae'];
+  // the home side keeps its colour; the away side switches to a contrasting "change strip"
+  // whenever its colour is too close to home's — so the two teams are always easy to tell apart.
+  function assignKitColors() {
+    game.home.kitCol = game.home.def.col;
+    let away = game.away.def.col;
+    if (colorDist(game.home.kitCol, away) < 200) {
+      let best = away, bestD = -1;
+      for (const c of KIT_BEACONS) { const d = colorDist(c, game.home.kitCol); if (d > bestD) { bestD = d; best = c; } }
+      away = best;
+    }
+    game.away.kitCol = away;
+  }
+  function teamRenderCol(side) { const tm = teamObj(side); return (tm && tm.kitCol) || teamObj(side).def.col; }
 
   // ============================================================
   // MATCH SETUP
@@ -464,6 +485,7 @@
     game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
+    assignKitColors();                              // away gets a change strip if the colours clash
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
     game.clockSec = 0; game.half = 1; game.phase = 'play';
     game.poss = { home: 1, away: 1 };
@@ -1917,6 +1939,7 @@
     const youId = game.ts.you || TEAMS[0].id;
     game.home = makeTeam(youId, 'home', game.settings.formation);
     game.away = makeTeam(TEAMS.find(t => t.id !== youId).id, 'away', '4-3-3');
+    assignKitColors();
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z:0, vx:0, vy:0, vz:0, owner:null, shot:false, trail:[] };
     game.clockSec = 0; game.half = 1; game.phase = 'play';
     game.poss = { home:1, away:1 };
@@ -2141,7 +2164,7 @@
     for (let i = 0; i < 36; i++) {
       const a = srand() * 6.28, s = rrange(6, 22);
       game.effects.push({ type: 'spark', x: gx + rrange(-3,3), y: gy + (side==='home'?1:-1)*rrange(0,2),
-        vx: Math.cos(a)*s, vy: Math.sin(a)*s - 6, t: 0, life: rrange(0.7, 1.6), col: teamObj(side).def.col });
+        vx: Math.cos(a)*s, vy: Math.sin(a)*s - 6, t: 0, life: rrange(0.7, 1.6), col: teamRenderCol(side) });
     }
     game.effects.push({ type: 'flash', x: gx, y: gy, t: 0, life: 0.5 });
   }
@@ -2180,8 +2203,8 @@
   // and passing lanes open up). The active player you control is drawn a touch bigger.
   function playerBodyR(p) {
     const s = geom.s;
-    const r = p.isGK ? 2.7 : 2.5;
-    let bodyR = Math.max(5.5, r * s * 0.40 + 2.6);
+    const r = p.isGK ? 3.1 : 2.9;
+    let bodyR = Math.max(6.2, r * s * 0.43 + 3.1);
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
     if (isActive) bodyR *= 1.18;
     return bodyR;
@@ -2329,7 +2352,7 @@
       const gx0 = CFG.PW/2 - CFG.goalHalfW, gx1 = CFG.PW/2 + CFG.goalHalfW;
       const gy = top ? 0 : CFG.PL, back = gy + (top ? -1 : 1) * CFG.goalDepth;
       ctx.save();
-      ctx.strokeStyle = hexA(teamObj(otherSide(side)).def.col, 0.5 * r + 0.2);
+      ctx.strokeStyle = hexA(teamRenderCol(otherSide(side)), 0.5 * r + 0.2);
       ctx.lineWidth = 1.4;
       for (let i = 1; i < 7; i++) {
         const fx = i/7; const x = lerp(wx(gx0), wx(gx1), fx);
@@ -2387,11 +2410,12 @@
   function drawPlayer(p) {
     const s = geom.s;
     const sx = wx(p.x), sy = wy(p.y);
-    const t = teamObj(p.side).def;
-    const col = p.isGK ? t.gk : t.col;
+    const team = teamObj(p.side); const t = team.def;
+    const kit = team.kitCol || t.col;                // on-pitch strip (away gets a change strip if colours clash)
+    const col = p.isGK ? t.gk : kit;
     const isActive = p.id === game.activeId && p.side === 'home' && !game._allAI;
     const hasBall = game.ball.owner === p.id;
-    const bodyR = playerBodyR(p);                    // smaller figures → less crowded, active player stands out
+    const bodyR = playerBodyR(p);
 
     // dash trail
     if (isActive && p.dashT > 0) {
@@ -2404,7 +2428,19 @@
 
     // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
-    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*0.95, bodyR*0.42, 0, 0, 6.2832); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.62, bodyR*0.9, bodyR*0.4, 0, 0, 6.2832); ctx.fill();
+
+    // team-colour ground ring — instant which-side-is-this read for every player
+    // (the active player / ball-carrier instead get the brighter possession ring below)
+    if (!(isActive || hasBall)) {
+      ctx.save();
+      ctx.fillStyle = hexA(kit, 0.20);
+      ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*1.2, bodyR*0.56, 0, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = kit; ctx.lineWidth = Math.max(1.8, bodyR*0.2);
+      ctx.shadowColor = hexA(kit, 0.65); ctx.shadowBlur = 4;
+      ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*1.2, bodyR*0.56, 0, 0, 6.2832); ctx.stroke();
+      ctx.restore();
+    }
 
     // possession / active ring — the carrier gets a filled glow disc (stronger), so it's
     // obvious who has the ball vs. who you merely control.
@@ -2429,12 +2465,12 @@
     ctx.moveTo(sx + bodyR*0.3, sy + bodyR*0.25); ctx.lineTo(sx + bodyR*0.3, sy + bodyR*0.85 - swing);
     ctx.stroke(); ctx.lineCap = 'butt';
 
-    // torso (kit) with sheen + a bright rim so it reads on the see-through display
+    // torso (kit) — saturated so the team colour dominates, with a dark rim for edge pop
     const grad = ctx.createLinearGradient(sx, sy - bodyR, sx, sy + bodyR);
-    grad.addColorStop(0, shade(col, 0.2)); grad.addColorStop(1, shade(col, -0.2));
+    grad.addColorStop(0, shade(col, 0.30)); grad.addColorStop(1, shade(col, -0.10));
     ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.ellipse(sx, sy, bodyR*0.82, bodyR*0.96, 0, 0, 6.2832); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = shade(col, 0.4); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(sx, sy, bodyR*0.88, bodyR*1.02, 0, 0, 6.2832); ctx.fill();
+    ctx.lineWidth = Math.max(1.6, bodyR*0.16); ctx.strokeStyle = shade(col, -0.5); ctx.stroke();
 
     // shorts (secondary kit colour)
     ctx.fillStyle = t.col2;
@@ -2570,11 +2606,12 @@
   // ============================================================
   function paintScoreboard() {
     const h = game.home.def, a = game.away.def;
+    const hc = teamRenderCol('home'), ac = teamRenderCol('away');   // match the on-pitch strips
     $('sb-home-code').textContent = h.code; $('sb-away-code').textContent = a.code;
-    $('sb-home-dot').style.color = h.col; $('sb-away-dot').style.color = a.col;
-    $('sb-home-dot').style.background = h.col; $('sb-away-dot').style.background = a.col;
-    document.documentElement.style.setProperty('--home-col', h.col);
-    document.documentElement.style.setProperty('--away-col', a.col);
+    $('sb-home-dot').style.color = hc; $('sb-away-dot').style.color = ac;
+    $('sb-home-dot').style.background = hc; $('sb-away-dot').style.background = ac;
+    document.documentElement.style.setProperty('--home-col', hc);
+    document.documentElement.style.setProperty('--away-col', ac);
     $('sb-home-score').textContent = game.home.score;
     $('sb-away-score').textContent = game.away.score;
   }

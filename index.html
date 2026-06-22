@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
   <div id="app">
@@ -157,16 +157,35 @@
           <button class="opt-row focusable" data-action="pause-cycle-mentality">
             <span class="opt-label">Mentality</span><span class="opt-value" id="pause-mentality">Balanced</span>
           </button>
+          <button class="opt-row focusable" data-action="goto-subs">
+            <span class="opt-label">Substitutions</span><span class="opt-value">›</span>
+          </button>
         </div>
         <nav class="overlay-menu">
           <button class="title-btn focusable" data-action="resume">Resume</button>
           <button class="title-btn focusable" data-action="watch-toggle" id="pause-watch-btn">👁 Watch (AI plays)</button>
           <button class="title-btn focusable" data-action="restart-match">Restart Match</button>
           <button class="title-btn focusable" data-action="toggle-sound" id="sound-toggle-btn">Sound: ON</button>
-          <button class="title-btn focusable" data-action="menu-touch-toggle" id="touch-toggle-btn">Touch Controls: OFF</button>
           <button class="title-btn focusable danger" data-action="quit-title">Quit to Title</button>
         </nav>
       </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SUBSTITUTIONS                                                 -->
+    <!-- ============================================================ -->
+    <div id="subs" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>Substitutions</h1>
+        <span class="header-meta" id="subs-meta">5 subs left</span>
+      </header>
+      <button class="opt-row focusable" data-action="subs-auto" id="subs-auto-row">
+        <span class="opt-label">Auto-subs <span class="subs-auto-hint">(AI manages tired legs)</span></span>
+        <span class="opt-value" id="subs-auto">ON</span>
+      </button>
+      <p class="subs-title" id="subs-title">Tap a player to take off</p>
+      <div class="content subs-list" id="subs-list"></div>
     </div>
 
     <!-- ============================================================ -->
@@ -357,6 +376,10 @@
           <span class="opt-label">Formation</span>
           <span class="opt-value" id="opt-formation">4-3-3</span>
         </button>
+        <button class="opt-row focusable" data-action="toggle-autosub">
+          <span class="opt-label">Auto Substitutions</span>
+          <span class="opt-value" id="opt-autosub">ON</span>
+        </button>
         <button class="opt-row focusable" data-action="toggle-sound">
           <span class="opt-label">Sound</span>
           <span class="opt-value" id="opt-sound">ON</span>
@@ -373,6 +396,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=12"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

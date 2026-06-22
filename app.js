@@ -56,6 +56,10 @@
   // team mentality (your coaching choice) — shifts how high the whole side plays
   const MENTALITY = { Defensive: -0.12, Balanced: 0, Attacking: 0.14 };
   const MENTALITY_KEYS = ['Defensive', 'Balanced', 'Attacking'];
+  // substitutions / stamina / cards
+  const SUBS_MAX = 5, BENCH_SIZE = 5;
+  const BENCH_ROLES = ['DEF', 'MID', 'MID', 'FWD', 'FWD'];   // bench cover
+  const TIRE_THRESH = 0.60;                                   // auto-sub a starter below this if a fresher option exists
 
   // ============================================================
   // TEAMS — fictional, distinct kits (bright on additive display) + ratings
@@ -187,7 +191,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -259,11 +263,12 @@
     else if (id === 'settings') renderSettings();
     else if (id === 'pause') {
       $('pause-score').textContent = scoreLine();
-      $('sound-toggle-btn').textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
-      $('touch-toggle-btn').textContent = 'Touch Controls: ' + (game.settings.touch ? 'ON' : 'OFF');
+      const sb = $('sound-toggle-btn'); if (sb) sb.textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
+      const tb = $('touch-toggle-btn'); if (tb) tb.textContent = 'Touch Controls: ' + (game.settings.touch ? 'ON' : 'OFF');
       const wb = $('pause-watch-btn'); if (wb) wb.textContent = game.watching ? '🎮 Take Control' : '👁 Watch (AI plays)';
       renderPauseTactics();
     }
+    else if (id === 'subs') { game._subOff = null; renderSubs(); }
     else if (id === 'halftime') { $('ht-score').textContent = scoreLine(); renderStatGrid($('ht-stats')); }
     else if (id === 'result') renderResult();
     else if (id === 'cup') renderCup();
@@ -306,9 +311,10 @@
     if (!game.home || !game.away || !game.ball || !game.stats) return null;
     if (game.matchMode === 'tutorial' || game.phase === 'ended') return null;
     const serTeam = (t) => ({ teamId: t.teamId, side: t.side, score: t.score, formKey: t.formKey, mentality: t.mentality,
+      subsLeft: t.subsLeft, bench: (t.bench || []).map(p => ({ ...p })),
       players: t.players.map(p => ({ ...p })) });             // players are all primitives → plain copy
     return {
-      v: 2,
+      v: 3,
       home: serTeam(game.home), away: serTeam(game.away),
       ball: { ...game.ball, trail: game.ball.trail ? game.ball.trail.slice() : [] },
       clockSec: game.clockSec, half: game.half, phase: game.phase, phaseT: game.phaseT || 0,
@@ -322,11 +328,13 @@
   }
   function restoreMatch(snap) {
     try {
-      if (!snap || snap.v !== 2 || !snap.home || !snap.away) return false;
+      if (!snap || snap.v !== 3 || !snap.home || !snap.away) return false;
       const rebuild = (sd) => ({
         teamId: sd.teamId, side: sd.side, def: teamById(sd.teamId), score: sd.score || 0,
         formKey: sd.formKey, form: FORMATIONS[sd.formKey] || FORMATIONS['4-3-3'],
         mentality: sd.mentality || 'Balanced',
+        subsLeft: sd.subsLeft != null ? sd.subsLeft : SUBS_MAX,
+        bench: (sd.bench || []).map(p => ({ ...p })),
         players: sd.players.map(p => ({ ...p })),
       });
       game.home = rebuild(snap.home);
@@ -355,7 +363,7 @@
   function saveMatch() { try { const s = serializeMatch(); if (s) localStorage.setItem(LS_MATCH, JSON.stringify(s)); } catch (e) {} }
   function clearMatch() { try { localStorage.removeItem(LS_MATCH); } catch (e) {} }
   function loadMatchSnap() { try { const s = localStorage.getItem(LS_MATCH); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
-  function hasSavedMatch() { const s = loadMatchSnap(); return !!(s && s.v === 2 && s.home && s.away); }
+  function hasSavedMatch() { const s = loadMatchSnap(); return !!(s && s.v === 3 && s.home && s.away); }
 
   // ============================================================
   // TITLE / SETTINGS / TEAM SELECT UI
@@ -367,7 +375,7 @@
     const cont = $('title-continue');
     if (cont) {
       const snap = loadMatchSnap();
-      const has = !!(snap && snap.v === 2 && snap.home && snap.away);
+      const has = !!(snap && snap.v === 3 && snap.home && snap.away);
       cont.classList.toggle('hidden', !has);
       if (has) {
         const hc = teamById(snap.home.teamId).code, ac = teamById(snap.away.teamId).code;
@@ -381,6 +389,7 @@
     $('opt-difficulty').textContent = game.settings.difficulty;
     $('opt-length').textContent = game.settings.length;
     $('opt-formation').textContent = game.settings.formation;
+    const oa = $('opt-autosub'); if (oa) oa.textContent = game.settings.autoSub ? 'ON' : 'OFF';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -390,6 +399,35 @@
   function renderPauseTactics() {
     const f = $('pause-formation'); if (f) f.textContent = (game.home && game.home.formKey) || game.settings.formation;
     const m = $('pause-mentality'); if (m) m.textContent = (game.home && game.home.mentality) || game.settings.mentality || 'Balanced';
+  }
+  // ----- substitutions screen -----
+  function fitBar(p) {
+    const pct = Math.round((p.stam != null ? p.stam : 1) * 100);
+    const col = pct > 60 ? 'var(--grn)' : pct > 35 ? 'var(--gold)' : 'var(--red)';
+    return `<span class="fit-bar"><span class="fit-fill" style="width:${pct}%;background:${col}"></span></span><span class="fit-pct">${pct}</span>`;
+  }
+  function renderSubs() {
+    const t = game.home; if (!t) return;
+    $('subs-meta').textContent = `${t.subsLeft} sub${t.subsLeft === 1 ? '' : 's'} left`;
+    const ab = $('subs-auto'); if (ab) ab.textContent = game.settings.autoSub ? 'ON' : 'OFF';
+    const host = $('subs-list');
+    const card = (p) => p.cards >= 2 ? `<span class="sub-card">🟥</span>` : p.cards === 1 ? `<span class="sub-card">🟨</span>` : '';
+    if (t.subsLeft <= 0 && !game._subOff) {
+      $('subs-title').textContent = 'On-pitch';
+      host.innerHTML = `<p class="cr-empty">No substitutions left.</p>` +
+        t.players.filter(p => !p.isGK).map(p => `<div class="sub-row static"><span class="sub-num">#${p.num}</span><span class="sub-role">${p.role}</span>${fitBar(p)}${card(p)}</div>`).join('');
+    } else if (!game._subOff) {
+      $('subs-title').textContent = 'Tap a player to take off';
+      const out = t.players.filter(p => !p.isGK).slice().sort((a, b) => (a.stam || 1) - (b.stam || 1));
+      host.innerHTML = out.map(p => `<button class="sub-row focusable" data-action="sub-off:${p.id}"><span class="sub-num">#${p.num}</span><span class="sub-role">${p.role}</span>${fitBar(p)}${card(p)}</button>`).join('');
+    } else {
+      const offP = t.players.find(p => p.id === game._subOff);
+      $('subs-title').textContent = `Bring on for #${offP ? offP.num : ''}`;
+      host.innerHTML = t.bench.slice().sort((a, b) => (b.stam || 1) - (a.stam || 1))
+        .map(p => `<button class="sub-row focusable" data-action="sub-on:${p.id}"><span class="sub-num">#${p.num}</span><span class="sub-role">${p.role}</span>${fitBar(p)}</button>`).join('')
+        + `<button class="sub-row sub-cancel focusable" data-action="sub-cancel">✕ Cancel</button>`;
+    }
+    focusFirst(screens['subs']);
   }
 
   function crestStyle(t) {
@@ -496,14 +534,22 @@
     const t = teamById(teamId);
     const form = FORMATIONS[formKey] || FORMATIONS['4-3-3'];
     const captainIdx = form.findIndex(f => f.role === 'MID');     // armband on a central mid
-    const players = form.map((f, i) => ({
-      id: side + i, side, role: f.role, num: f.num, idx: i,
-      nx: f.nx, ny: f.ny, isGK: f.role === 'GK', captain: i === captainIdx,
-      x: 0, y: 0, vx: 0, vy: 0, heading: side === 'home' ? -Math.PI/2 : Math.PI/2,
+    const mk = (over) => ({
+      side, x: 0, y: 0, vx: 0, vy: 0, heading: side === 'home' ? -Math.PI/2 : Math.PI/2,
       speedR: 0.85 + t.r.PAC/100 * 0.32,
       tackleCd: 0, kickCd: 0, dashT: 0, runPhase: srand()*6.28, aiT: srand()*0.3,
+      stam: 1, cards: 0, ...over,
+    });
+    const players = form.map((f, i) => mk({
+      id: side + i, role: f.role, num: f.num, idx: i,
+      nx: f.nx, ny: f.ny, isGK: f.role === 'GK', captain: i === captainIdx,
     }));
-    return { teamId, side, def: t, score: 0, players, form, formKey, mentality: 'Balanced' };
+    const bench = [];
+    for (let j = 0; j < BENCH_SIZE; j++) bench.push(mk({
+      id: side + 'b' + j, role: BENCH_ROLES[j] || 'MID', num: 12 + j, idx: -1,
+      nx: 0.5, ny: 0.5, isGK: false, captain: false, onBench: true,
+    }));
+    return { teamId, side, def: t, score: 0, players, form, formKey, mentality: 'Balanced', bench, subsLeft: SUBS_MAX };
   }
   // swap a team's shape live (coach changes formation mid-match). Players keep their
   // numbers/identity; only their role + formation target move, so they drift into the new shape.
@@ -512,6 +558,86 @@
     team.formKey = formKey; team.form = form;
     team.players.forEach((pl, i) => { const f = form[i]; if (!f) return; pl.role = f.role; pl.nx = f.nx; pl.ny = f.ny; });
   }
+  // ----- substitutions / cards / injuries -----
+  function doSub(team, outId, inId) {
+    if (!team || team.subsLeft <= 0) return false;
+    const oi = team.players.findIndex(p => p.id === outId);
+    const bi = team.bench.findIndex(p => p.id === inId);
+    if (oi < 0 || bi < 0) return false;
+    const out = team.players[oi], inP = team.bench[bi];
+    if (out.isGK) return false;                              // keep it simple: no GK subs
+    // the sub inherits the outgoing player's slot, role and spot on the pitch
+    inP.idx = out.idx; inP.role = out.role; inP.nx = out.nx; inP.ny = out.ny;
+    inP.isGK = out.isGK; inP.captain = out.captain;
+    inP.x = out.x; inP.y = out.y; inP.vx = 0; inP.vy = 0; inP.heading = out.heading; inP._velAng = out.heading;
+    inP.tackleCd = 0; inP.kickCd = 0; inP.dashT = 0; inP.aiT = 0; inP.onBench = false; out.onBench = true;
+    team.players[oi] = inP; team.bench[bi] = out;
+    team.subsLeft--;
+    // hand over any references the outgoing player held
+    if (game.ball.owner === out.id) game.ball.owner = inP.id;
+    if (game.activeId === out.id) game.activeId = inP.id;
+    if (game.lastTouchPlayer === out.id) game.lastTouchPlayer = inP.id;
+    if (game.lastKicker === out.id) game.lastKicker = inP.id;
+    const code = team.def.code;
+    showToast(`${code} sub · #${out.num} ⟶ #${inP.num}`);
+    if (team.side === 'home') say(`Substitution — #${inP.num} comes on for #${out.num}.`);
+    return true;
+  }
+  function autoSubPlayer(team, outP) {                        // bring on the freshest suitable bench player
+    if (!team || team.subsLeft <= 0 || !team.bench.length) return false;
+    const same = team.bench.filter(b => b.role === outP.role);
+    const pool = same.length ? same : team.bench;
+    let best = null; for (const b of pool) if (!best || b.stam > best.stam) best = b;
+    return best ? doSub(team, outP.id, best.id) : false;
+  }
+  function autoSubTick() {                                    // only fires at stoppages so it never disrupts play
+    [game.home, game.away].forEach(team => {
+      const auto = team.side === 'away' ? true : game.settings.autoSub;   // opponent always self-manages
+      if (!auto || team.subsLeft <= 0) return;
+      if (team._subCd && performance.now() < team._subCd) return;
+      let worst = null;
+      for (const p of team.players) { if (p.isGK) continue; if ((p.stam || 1) < TIRE_THRESH && (!worst || p.stam < worst.stam)) worst = p; }
+      if (!worst) return;
+      const fresh = team.bench.reduce((a, b) => (!a || b.stam > a.stam) ? b : a, null);
+      if (fresh && fresh.stam > worst.stam + 0.15) { autoSubPlayer(team, worst); team._subCd = performance.now() + 1500; }
+    });
+  }
+  function sendOff(p) {
+    const team = teamObj(p.side);
+    const oi = team.players.findIndex(q => q.id === p.id);
+    if (oi < 0) return;
+    team.players.splice(oi, 1);                               // down to ten — no replacement
+    p.sentOff = true;
+    if (game.ball.owner === p.id) game.ball.owner = null;
+    if (game.activeId === p.id) game.activeId = null;
+    spawnEffect('tackle', p.x, p.y); SFX.whistle();
+    showToast(`🟥 RED · ${team.def.code} #${p.num}`);
+    say(`Red card! ${team.def.code} #${p.num} is off — down to ${team.players.length}.`);
+  }
+  function injurePlayer(p) {
+    const team = teamObj(p.side);
+    if (p.injured) return; p.injured = true;
+    if (team.subsLeft > 0) { say(`${team.def.code} #${p.num} hurt — forced change.`); autoSubPlayer(team, p); }
+    else { p.stam = Math.min(p.stam, 0.4); say(`${team.def.code} #${p.num} is hurt but plays on — no subs left.`); }
+  }
+  function commitFoul(fouler, victim, x, y) {
+    if (!fouler || !victim) return;
+    game.stats.fouls[fouler.side]++;
+    SFX.whistle();
+    const code = teamObj(fouler.side).def.code;
+    const r = srand();
+    if (r < 0.04) { fouler.cards = 3; sendOff(fouler); }                       // straight red (rare)
+    else if (r < 0.28) {                                                        // booking
+      fouler.cards = (fouler.cards || 0) + 1;
+      if (fouler.cards >= 2) { say(`Second yellow! ${code} #${fouler.num} sent off.`); sendOff(fouler); }
+      else { showToast(`🟨 ${code} #${fouler.num}`); say(`Yellow card — ${code} #${fouler.num}.`); }
+    } else {
+      say(fouler.side === 'home' ? 'Foul given against you.' : 'Free kick — good challenge won the whistle.');
+    }
+    if (!fouler.sentOff && srand() < 0.05) injurePlayer(victim);                // occasional injury
+    freeKick(victim.side, x, y);
+  }
+
   // formation home position in WORLD coords for a side
   function homePos(side, f, p) {
     // attacking-normalised → world. HOME attacks up (ny=1 → y=0). AWAY attacks down (ny=1 → y=PL).
@@ -553,8 +679,9 @@
   // place everyone at formation home (kickoff / goal / half restart)
   function resetPositions(kickoffTeam, fullKickoff) {
     [game.home, game.away].forEach(team => {
-      team.players.forEach((p, i) => {
-        const h = homePos(team.side, team.form[i], p);
+      team.players.forEach((p) => {
+        const slot = team.form[p.idx] || { nx: p.nx, ny: p.ny };   // robust if the side is a man down
+        const h = homePos(team.side, slot, p);
         p.x = h.x; p.y = h.y; p.vx = 0; p.vy = 0; p.dashT = 0;
         // keep both teams in their own half for the kickoff
         if (fullKickoff) {
@@ -568,14 +695,14 @@
     const b = game.ball;
     b.x = CFG.PW/2; b.y = CFG.PL/2; b.z = 0; b.vx = 0; b.vy = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
     _prevBall.x = b.x; _prevBall.y = b.y;
-    // give the ball to the kickoff team's central midfielder
+    // give the ball to a central midfielder of the kickoff team (robust to red cards)
     const ko = teamObj(kickoffTeam);
-    const cm = ko.players[6];
+    const cm = ko.players.find(pl => pl.role === 'MID' && !pl.isGK) || ko.players.find(pl => !pl.isGK) || ko.players[0];
     cm.x = CFG.PW/2; cm.y = CFG.PL/2 + (kickoffTeam === 'home' ? 1.2 : -1.2);
     b.owner = cm.id; game.lastTouch = kickoffTeam; game.lastKicker = null; game.lastTouchPlayer = cm.id;
     // active = your carrier if you kick off, else your nearest to ball
     if (kickoffTeam === 'home') setActive(cm.id, true);
-    else setActive(nearestOfSide('home', b).id, true);
+    else { const n = nearestOfSide('home', b); if (n) setActive(n.id, true); }
   }
 
   function nearestOfSide(side, pt, excludeGK) {
@@ -712,6 +839,9 @@
   // ACTIONS (menu dispatch)
   // ============================================================
   function handleAction(action, el) {
+    // substitution picks carry the player id in the action string
+    if (action.indexOf('sub-off:') === 0) { game._subOff = action.slice(8); renderSubs(); return; }
+    if (action.indexOf('sub-on:') === 0) { if (game._subOff) { doSub(game.home, game._subOff, action.slice(7)); game._subOff = null; renderSubs(); } return; }
     switch (action) {
       case 'resume-saved': { const snap = loadMatchSnap(); if (snap && restoreMatch(snap)) navigateTo('match', { addToHistory:false }); else { clearMatch(); renderTitle(); } break; }
       case 'quick-match': {
@@ -771,6 +901,10 @@
         game.home.mentality = next; game.settings.mentality = next; saveStore(); saveMatch(); renderPauseTactics();
         break;
       }
+      case 'goto-subs': game._subOff = null; navigateTo('subs'); break;
+      case 'sub-cancel': game._subOff = null; renderSubs(); break;
+      case 'subs-auto': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSubs(); break;
+      case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -797,6 +931,11 @@
   function startSecondHalf() {
     game.half = 2; game.clockSec = HALF_SIM; game.phase = 'play';
     game.kickoffTeam = 'home';
+    // the break tops players' legs back up a bit
+    [game.home, game.away].forEach(tm => {
+      tm.players.forEach(p => p.stam = clamp((p.stam || 1) + 0.14, 0, 1));
+      tm.bench.forEach(p => p.stam = clamp((p.stam || 1) + 0.25, 0, 1));
+    });
     resetPositions('home', true);
     saveMatch();
     resumeMatch();
@@ -850,6 +989,7 @@
       game.phaseT -= dt;
       tickEffects(dt);
       decayRipples(dt);
+      if (game.matchMode !== 'tutorial') autoSubTick();     // make subs only at stoppages, never mid-flow
       if (game.phaseT <= 0) {
         if (game.phase === 'goal') { resetPositions(game._concede, true); game.phase = 'play'; }
         else game.phase = 'play';
@@ -861,9 +1001,11 @@
 
     if (game.matchMode === 'tutorial') {
       tickTutorial(dt);                            // guided steps; no clock / no half-time
+      game._simDt = 0;
     } else {
       // clock
       const scale = HALF_SIM / LENGTHS[game.settings.length];
+      game._simDt = dt * scale;                    // sim-seconds elapsed (so stamina drains per match-minute, not real-time)
       game.clockSec += dt * scale;
       if (game.half === 1 && game.clockSec >= HALF_SIM) { game.clockSec = HALF_SIM; goHalftime(); return; }
       if (game.half === 2 && game.clockSec >= HALF_SIM * 2) { game.clockSec = HALF_SIM * 2; goFulltime(); return; }
@@ -928,6 +1070,11 @@
     p.kickCd = Math.max(0, p.kickCd - dt);
     p.dashT = Math.max(0, (p.dashT || 0) - dt);
     if (p.isGK) return; // keepers handled separately
+    // stamina drains with effort (per match-minute via _simDt); a dash costs extra
+    if (game._simDt) {
+      const speedFrac = len(p.vx, p.vy) / CFG.playerMax;
+      p.stam = clamp((p.stam != null ? p.stam : 1) - game._simDt * (0.00005 + 0.00010 * speedFrac) - (p.dashT > 0 ? game._simDt * 0.0002 : 0), 0, 1);
+    }
 
     let mvx = 0, mvy = 0, sprint = 1;
     const b = game.ball;
@@ -959,7 +1106,8 @@
     // (curved turns) and ease the speed — feels fluid instead of snapping.
     const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;
     const diffSpd = (p.side === 'away' && !game._allAI) ? DIFFS[game.settings.difficulty].spd : 1;   // harder = quicker opponents (fair in spectator mode)
-    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * diffSpd * (b.owner === p.id ? 0.95 : 1);
+    const stamMul = 0.80 + 0.20 * (p.stam != null ? p.stam : 1);   // tired legs are slower
+    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * diffSpd * stamMul * (b.owner === p.id ? 0.95 : 1);
     const moveLen = len(mvx, mvy);
     let curSpeed = len(p.vx, p.vy);
     if (moveLen > 0.01) {
@@ -1338,11 +1486,8 @@
         game.lastTouch = p.side; game.lastKicker = null; game.lastTouchPlayer = p.id; game._lastWasShot = false;
         spawnEffect('win', p.x, p.y);
         if (p.side === 'home') { setActive(p.id, true); say(pick(['Won it back!', 'Great tackle!', 'Dispossessed!'])); }
-      } else if (srand() < 0.12) {
-        // foul → free kick to the carrier's team
-        game.stats.fouls[p.side]++;
-        SFX.whistle(); say('Foul given.');
-        freeKick(carrier.side, p.x, p.y);
+      } else if (srand() < 0.18) {
+        commitFoul(p, carrier, p.x, p.y);          // mistimed tackle → free kick, maybe a card
       }
     } else if (b.owner == null && dist(p, b) < CFG.captureR + 0.5) {
       b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
@@ -1370,10 +1515,14 @@
     const carR = teamObj(carrier.side).def.r.MID / 100;
     let rate = (0.4 + (defR - 0.6) * 2.0) * (1 - pd / CFG.tackleR);   // ramps up the closer they get
     rate *= clamp(1.15 - (carR - 0.6), 0.6, 1.35);                   // skilled carriers shield better
+    rate *= clamp(1.3 - (carrier.stam != null ? carrier.stam : 1) * 0.3, 0.9, 1.3);   // tired carriers get robbed more
     if (carrier.dashT > 0) rate *= 0.4;                              // a dash buys a moment
     if (game._allAI) rate *= 0.6;                                    // spectator: fewer turnovers → settled, end-to-end play
     else rate *= (carrier.side === 'home') ? diff.tackle : (2 - diff.tackle);  // difficulty scales the human's opponent
-    if (srand() < rate * dt) knockLoose(carrier, presser);
+    if (srand() < rate * dt) {
+      if (srand() < 0.14) commitFoul(presser, carrier, carrier.x, carrier.y);   // some challenges are fouls → free kick / cards
+      else knockLoose(carrier, presser);
+    }
   }
   function knockLoose(carrier, presser) {
     const b = game.ball;
@@ -2608,6 +2757,10 @@
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(p.num), sx, sy + bodyR*0.04);
 
+    // discipline / fitness pips — tiny cues so you know who to manage
+    if (p.cards >= 1) { ctx.fillStyle = p.cards >= 2 ? '#ff4d5e' : '#ffd23f'; ctx.fillRect(sx + bodyR*0.62, sy - bodyR*1.12, bodyR*0.3, bodyR*0.44); }
+    if (!p.isGK && (p.stam != null ? p.stam : 1) < 0.45) { ctx.fillStyle = '#ff9a2e'; ctx.beginPath(); ctx.arc(sx - bodyR*0.8, sy - bodyR*0.95, bodyR*0.22, 0, 6.2832); ctx.fill(); }
+
     // active facing chevron
     if (isActive) {
       const cx = sx + Math.cos(p.heading) * bodyR*1.95;
@@ -2851,6 +3004,10 @@
       penKick: (dir) => { penInput(dir || 'ArrowUp'); penInput('Enter'); },
       saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
       watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
+      sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
+      sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },
+      injure: (id) => { const p = playerById(id); if (p) injurePlayer(p); },
+      setStam: (id, v) => { const p = playerById(id); if (p) p.stam = v; },
       render,
     };
   }

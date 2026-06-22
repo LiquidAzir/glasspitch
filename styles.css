@@ -308,6 +308,26 @@ html, body {
 }
 .match-toast.show { opacity: 1; }
 
+/* substitutions screen */
+#subs-auto-row { margin: 0 8px 6px; }
+.subs-auto-hint { color: var(--ink-3); font-weight: 600; font-size: 12px; }
+.subs-title { padding: 4px 12px; color: var(--ink-2); font-size: 14px; font-weight: 700; }
+.subs-list { gap: 8px; padding-top: 2px; }
+.sub-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface-2); border: 1.5px solid var(--line); border-radius: 12px;
+  padding: 11px 14px; cursor: pointer; text-align: left; width: 100%;
+}
+.sub-row.static { cursor: default; opacity: 0.85; }
+.sub-row:focus { transform: scale(1.02); border-color: var(--cyn); box-shadow: var(--shadow-glow); }
+.sub-row.sub-cancel { justify-content: center; color: var(--ink-2); background: var(--surface); }
+.sub-num { font-size: 16px; font-weight: 900; width: 38px; color: var(--ink); }
+.sub-role { font-size: 12px; font-weight: 700; color: var(--ink-3); width: 40px; letter-spacing: 0.5px; }
+.fit-bar { flex: 1; height: 10px; border-radius: 6px; background: #0a130e; overflow: hidden; }
+.fit-fill { display: block; height: 100%; border-radius: 6px; }
+.fit-pct { width: 30px; text-align: right; font-size: 12px; font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.sub-card { font-size: 14px; }
+
 /* spectator badge */
 .watch-badge {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);

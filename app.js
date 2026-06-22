@@ -193,7 +193,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '2D', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '2D', cam: 'Side', sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -404,6 +404,7 @@
     const oa = $('opt-autosub'); if (oa) oa.textContent = game.settings.autoSub ? 'ON' : 'OFF';
     const os = $('opt-setpieces'); if (os) os.textContent = game.settings.setPieces ? 'ON' : 'OFF';
     const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
+    const oc = $('opt-cam'); if (oc) oc.textContent = game.settings.cam || 'Side';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -946,6 +947,7 @@
       case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
       case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
       case 'toggle-gfx': toggleGfx(); break;
+      case 'toggle-cam': toggleCam(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -2832,6 +2834,25 @@
     saveStore(); renderSettings();
     if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false);
   }
+  // 3D camera presets — selectable in Settings. Side = fixed side-on broadcast (default,
+  // equidistant goals); Behind = the original elevated behind-the-near-goal view.
+  const CAM_PRESETS = {
+    Side: { fov: 49, pos: [-100, 74, 0], look: [0, -1, 0] },
+    Behind: { fov: 39, pos: [0, 104, 140], look: [0, 0, -6] },
+  };
+  function applyCam() {
+    if (!R3D || !R3D.ready) return;
+    const c = CAM_PRESETS[game.settings.cam] || CAM_PRESETS.Side;
+    R3D.camera.fov = c.fov;
+    R3D.camera.position.set(c.pos[0], c.pos[1], c.pos[2]);
+    R3D.camera.lookAt(c.look[0], c.look[1], c.look[2]);
+    R3D.camera.updateProjectionMatrix();
+  }
+  function toggleCam() {
+    game.settings.cam = game.settings.cam === 'Side' ? 'Behind' : 'Side';
+    saveStore(); renderSettings(); applyCam();
+    if (game.settings.gfx === '3D' && R3D && R3D.ready) render();   // live update if 3D is showing
+  }
   function showPitch3D(on) {
     if (cv3d) cv3d.classList.toggle('hidden', !on);
     if (cv) cv.classList.toggle('hidden', !!on && R3D && R3D.ready);   // hide 2D canvas only once 3D is live
@@ -2908,8 +2929,7 @@
     renderer.outputColorSpace = T.SRGBColorSpace;
     cv3d.addEventListener('webglcontextlost', (e) => { e.preventDefault(); failTo2D('3D context lost — using 2D'); }, false);
     const scene = new T.Scene();
-    const camera = new T.PerspectiveCamera(49, 1, 0.5, 520);   // fixed side-on broadcast cam (past the sideline, elevated, looking across) — goals equidistant so play reads the same near either net
-    camera.position.set(-100, 74, 0); camera.lookAt(0, -1, 0);
+    const camera = new T.PerspectiveCamera(49, 1, 0.5, 520);   // fixed broadcast cam; pose set from the selected CAM_PRESET via applyCam() below
     scene.add(new T.HemisphereLight(0x9bc2ff, 0x0a2014, 1.0));
     const dl = new T.DirectionalLight(0xffffff, 0.55); dl.position.set(8, 80, 50); scene.add(dl);
     // pitch ground (reuse the 2D art language via a full-bleed texture)
@@ -2964,6 +2984,7 @@
     const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
     R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
+    applyCam();        // pose the camera from the selected Side/Behind preset
     refresh3DKits();
   }
   function refresh3DKits() {
@@ -3496,6 +3517,7 @@
       watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
       sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
       gfx: (v) => { game.settings.gfx = v || '3D'; if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
+      cam: (v) => { game.settings.cam = v || 'Side'; applyCam(); render(); }, toggleCam: () => toggleCam(),
       setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
       spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },

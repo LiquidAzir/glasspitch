@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=27">
+  <link rel="stylesheet" href="styles.css?v=28">
 </head>
 <body>
   <div id="app">
@@ -428,6 +428,10 @@
           <span class="opt-label">Graphics <span class="subs-auto-hint">(match view)</span></span>
           <span class="opt-value" id="opt-gfx">2D</span>
         </button>
+        <button class="opt-row focusable" data-action="toggle-cam">
+          <span class="opt-label">3D Camera <span class="subs-auto-hint">(side / behind)</span></span>
+          <span class="opt-value" id="opt-cam">Side</span>
+        </button>
         <button class="opt-row focusable" data-action="toggle-sound">
           <span class="opt-label">Sound</span>
           <span class="opt-value" id="opt-sound">ON</span>
@@ -444,6 +448,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=27"></script>
+  <script src="app.js?v=28"></script>
 </body>
 </html>

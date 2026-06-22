@@ -173,8 +173,10 @@
     return {
       resume() { const c = ensure(); if (c && c.state === 'suspended') c.resume(); },
       setEnabled(v) { enabled = v; }, isEnabled() { return enabled; },
-      kick()    { tone(160, 0.09, 'sine', 0.32, 70); noise(0.04, 0.10, 1200, 'lowpass'); },
-      pass()    { tone(300, 0.06, 'sine', 0.15, 190); },
+      // ball strike — punchy "thock": pitch-dropping body thump + sub + a short leathery contact snap
+      kick()    { tone(200, 0.11, 'triangle', 0.34, 52); tone(110, 0.17, 'sine', 0.26, 40); noise(0.05, 0.18, 2300, 'bandpass'); noise(0.02, 0.10, 600, 'lowpass'); },
+      // a lighter, crisper "tok" for a pass
+      pass()    { tone(280, 0.05, 'triangle', 0.16, 150); noise(0.022, 0.07, 1700, 'bandpass'); },
       tackle()  { noise(0.12, 0.13, 500, 'lowpass'); tone(120, 0.08, 'sine', 0.16, 80); },
       whistle() { tone(2350, 0.16, 'square', 0.14, 2650); noise(0.10, 0.03, 3200); },
       save()    { tone(190, 0.12, 'square', 0.16, 130); noise(0.10, 0.07, 2000); },
@@ -191,7 +193,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -275,6 +277,7 @@
     else if (id === 'league') renderLeague();
     else if (id === 'career') renderCareer();
     else if (id === 'shootout') { drawPen(); penInstr(); }
+    else if (id === 'setpiece') { drawSetPiece(); spInstr(); }
     else if (id === 'match') {
       game.guardUntil = performance.now() + 220;
       // clear transient FX so re-showing the match screen doesn't replay the last
@@ -397,6 +400,7 @@
     $('opt-length').textContent = game.settings.length;
     $('opt-formation').textContent = game.settings.formation;
     const oa = $('opt-autosub'); if (oa) oa.textContent = game.settings.autoSub ? 'ON' : 'OFF';
+    const os = $('opt-setpieces'); if (os) os.textContent = game.settings.setPieces ? 'ON' : 'OFF';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -775,6 +779,7 @@
 
     // penalty shootout has its own input model
     if (game.screen === 'shootout') { if (DIRV[key] || key === 'Enter') { penInput(key); e.preventDefault(); } return; }
+    if (game.screen === 'setpiece') { if (DIRV[key] || key === 'Enter') { spInput(key); e.preventDefault(); } return; }
 
     const inMatch = game.screen === 'match' && game.phase !== 'ended';
 
@@ -924,6 +929,7 @@
       case 'sub-cancel': game._subOff = null; renderSubs(); break;
       case 'subs-auto': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSubs(); break;
       case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
+      case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -1798,12 +1804,16 @@
     restartAt(toSide, CFG.PW/2 + rrange(-6,6), y, 'Goal kick', true);
   }
   function cornerKick(toSide, lr, topGoal) {
+    if (canSetPiece(toSide) && topGoal) { triggerSetPiece('corner', lr); return; }   // your corner → mini-game
     const x = lr === 'L' ? 1 : CFG.PW - 1;
     const y = topGoal ? 1 : CFG.PL - 1;
     restartAt(toSide, x, y, 'Corner', true);
     say(toSide === 'home' ? pick(['Corner for you — chance here.', 'Swinging it in from the corner.']) : pick(['Corner to the opposition.', 'Defending a corner now.']));
   }
-  function freeKick(toSide, x, y) { restartAt(toSide, x, y, 'Free kick', true); }
+  function freeKick(toSide, x, y) {
+    if (canSetPiece(toSide) && isShootingFK(x, y)) { triggerSetPiece('fk', x, y); return; }   // shootable free kick → mini-game
+    restartAt(toSide, x, y, 'Free kick', true);
+  }
 
   // ============================================================
   // HALF / FULL TIME
@@ -2096,6 +2106,164 @@
     x.fillStyle = '#a9c6b6'; x.fillText(teamById(c.opp).code, 300 - Math.max(5, c.histA.length)*10 - 12, 112);
     row(c.histA, 112);
     x.textBaseline = 'alphabetic';
+  }
+
+  // ============================================================
+  // SET PIECES — free kicks & corners as quick aim-and-tap mini-games.
+  // Only YOUR attacking set pieces become a mini-game; everything else
+  // auto-restarts so the flow of play isn't broken.
+  // ============================================================
+  function canSetPiece(side) {
+    return side === 'home' && game.settings.setPieces && !game._allAI && !game.watching && game.matchMode !== 'tutorial';
+  }
+  function isShootingFK(x, y) {            // home attacks up (goal y=0): close & central = shootable
+    return y < 30 && Math.abs(x - CFG.PW/2) < 24;
+  }
+  function triggerSetPiece(type, a, b) {
+    const taker = game.home.players.filter(p => !p.isGK).slice().sort((u, v) => (v.stam || 1) - (u.stam || 1))[0] || game.home.players[0];
+    game.sp = { type, taker: taker.id, phase: 'aim', aim: (type === 'fk' ? 2 : 1), power: 0, powerDir: 1, result: null, lr: (type === 'corner' ? a : 'L') };
+    navigateTo('setpiece', { addToHistory: false });
+    SFX.whistle();
+    drawSetPiece(); spInstr();
+  }
+  let _spRaf = 0;
+  function startSpLoop() { if (!_spRaf) _spRaf = requestAnimationFrame(spLoop); }
+  function stopSpLoop() { if (_spRaf) cancelAnimationFrame(_spRaf); _spRaf = 0; }
+  function spLoop() {
+    _spRaf = 0;
+    const c = game.sp;
+    if (!c || game.screen !== 'setpiece') return;
+    if (c.phase === 'power' || c.phase === 'timing') {
+      c.power += c.powerDir * 0.024;
+      if (c.power >= 1) { c.power = 1; c.powerDir = -1; } else if (c.power <= 0) { c.power = 0; c.powerDir = 1; }
+      drawSetPiece();
+      _spRaf = requestAnimationFrame(spLoop);
+    }
+  }
+  function spInput(key) {
+    const c = game.sp; if (!c) return;
+    if (c.phase === 'aim') {
+      const maxAim = c.type === 'fk' ? 4 : 2;
+      if (key === 'ArrowLeft') c.aim = Math.max(0, c.aim - 1);
+      else if (key === 'ArrowRight') c.aim = Math.min(maxAim, c.aim + 1);
+      else if (key === 'Enter') { c.phase = (c.type === 'fk') ? 'power' : 'timing'; c.power = 0; c.powerDir = 1; startSpLoop(); spInstr(); return; }
+      drawSetPiece(); spInstr();
+    } else if (c.phase === 'power' || c.phase === 'timing') {
+      if (key === 'Enter') { stopSpLoop(); spCommit(); }
+    }
+  }
+  function spCommit() {
+    const c = game.sp; if (!c) return;
+    SFX.kick();
+    const att = teamObj('home').def.r.ATT / 100;
+    if (c.type === 'fk') {
+      const aimThird = c.aim <= 1 ? 0 : c.aim === 2 ? 1 : 2;     // map 5 aim spots to keeper thirds
+      const keeperZone = aiKeeperDive();
+      const acc = clamp(1 - Math.abs(c.power - 0.72) * 2.4, 0, 1) * (0.65 + att * 0.5);
+      let outcome;
+      if (c.aim === 2 && c.power < 0.85) outcome = 'WALL';        // central low → blocked
+      else if (c.power > 0.94) outcome = 'OVER';
+      else if (c.power < 0.38) outcome = 'SAVED';
+      else if (aimThird === keeperZone) outcome = (srand() < acc * 0.4) ? 'GOAL' : 'SAVED';
+      else outcome = (srand() < acc) ? 'GOAL' : (srand() < 0.5 ? 'WIDE' : 'SAVED');
+      c.result = { outcome, scored: outcome === 'GOAL', keeperZone };
+    } else {
+      const def = teamObj('away').def.r.DEF / 100;
+      const cleared = srand() < clamp(0.32 + (def - 0.7) * 0.5 - (att - 0.7) * 0.4, 0.12, 0.58);
+      const headAcc = clamp(1 - Math.abs(c.power - 0.70) * 2.4, 0, 1) * (0.7 + att * 0.4);
+      let outcome;
+      if (cleared) outcome = 'CLEARED';
+      else if (headAcc < 0.3) outcome = 'OVER';
+      else outcome = (srand() < headAcc * 0.85) ? 'GOAL' : 'SAVED';
+      c.result = { outcome, scored: outcome === 'GOAL' };
+    }
+    c.phase = 'result';
+    if (c.result.scored) SFX.cheer(); else SFX.save();
+    drawSetPiece(); spInstr();
+    setTimeout(() => resolveSetPiece(c.result.scored, c.taker), 1300);
+  }
+  function resolveSetPiece(scored, takerId) {
+    game.sp = null; stopSpLoop();
+    navigateTo('match', { addToHistory: false });
+    if (scored) {
+      game.lastTouch = 'home'; game.lastKicker = null; game.lastTouchPlayer = takerId; game._lastWasShot = false;
+      const b = game.ball; b.owner = null; b.x = CFG.PW/2; b.y = 1; b.z = 0; b.vx = 0; b.vy = 0; b.trail.length = 0;
+      scoreGoal('home');
+    } else {
+      goalKick('away');     // missed / saved / cleared → opponent restarts, play resumes
+    }
+  }
+  let _spCtx = null;
+  function spMeter(x, val, sweet) {
+    const mx = 130, mw = 340, my = 478, mh = 26;
+    x.fillStyle = 'rgba(10,19,14,0.92)'; x.fillRect(mx, my, mw, mh);
+    x.strokeStyle = 'rgba(120,255,190,0.4)'; x.lineWidth = 1.5; x.strokeRect(mx, my, mw, mh);
+    x.fillStyle = 'rgba(62,240,143,0.4)'; x.fillRect(mx + (sweet - 0.12) * mw, my, 0.24 * mw, mh);   // sweet zone
+    x.fillStyle = '#ffd23f'; x.fillRect(mx + clamp(val, 0, 1) * mw - 3, my - 5, 6, mh + 10);          // marker
+    x.fillStyle = '#eafcf1'; x.font = '700 14px system-ui, sans-serif'; x.textAlign = 'center';
+    x.fillText('pinch in the green', 300, my - 12);
+  }
+  function drawSetPiece() {
+    const cnv = $('sp-canvas'); if (!cnv) return;
+    const x = _spCtx || (_spCtx = cnv.getContext('2d'));
+    const c = game.sp;
+    x.clearRect(0, 0, 600, 600);
+    const gx0 = 150, gx1 = 450, gtop = 116, gbot = 246;
+    // net + posts + ground
+    x.strokeStyle = 'rgba(200,235,255,0.22)'; x.lineWidth = 1;
+    for (let i = 0; i <= 12; i++) { const xx = lerp(gx0, gx1, i/12); x.beginPath(); x.moveTo(xx, gtop); x.lineTo(xx, gbot); x.stroke(); }
+    for (let j = 0; j <= 6; j++) { const yy = lerp(gtop, gbot, j/6); x.beginPath(); x.moveTo(gx0, yy); x.lineTo(gx1, yy); x.stroke(); }
+    x.strokeStyle = '#fff'; x.lineWidth = 4; x.shadowColor = 'rgba(150,230,255,0.8)'; x.shadowBlur = 8;
+    x.beginPath(); x.moveTo(gx0, gbot); x.lineTo(gx0, gtop); x.lineTo(gx1, gtop); x.lineTo(gx1, gbot); x.stroke(); x.shadowBlur = 0;
+    x.strokeStyle = 'rgba(120,255,190,0.45)'; x.lineWidth = 2; x.beginPath(); x.moveTo(40, gbot); x.lineTo(560, gbot); x.stroke();
+    if (!c) return;
+    const youCol = teamRenderCol('home'), oppCol = teamRenderCol('away'), gkCol = teamObj('away').def.gk;
+    if (c.type === 'fk') {
+      const zw = (gx1 - gx0) / 5, zoneX = (i) => gx0 + zw * (i + 0.5);
+      if (c.phase !== 'result') {
+        x.save(); x.strokeStyle = 'rgba(88,214,255,0.9)'; x.lineWidth = 2.5; x.shadowColor = '#58d6ff'; x.shadowBlur = 8;
+        const rx = zoneX(c.aim);
+        x.beginPath(); x.arc(rx, gtop + 24, 14, 0, 6.2832); x.stroke();
+        x.beginPath(); x.moveTo(rx - 20, gtop + 24); x.lineTo(rx + 20, gtop + 24); x.moveTo(rx, gtop + 4); x.lineTo(rx, gtop + 44); x.stroke(); x.restore();
+      }
+      const kThird = (c.phase === 'result') ? c.result.keeperZone : 1;
+      penFig(x, [gx0 + (gx1 - gx0) * 0.22, 300, gx1 - (gx1 - gx0) * 0.22][kThird], gbot - 4, gkCol, true);
+      for (let i = -1; i <= 1; i++) penFig(x, 300 + i * 30, gbot + 118, '#cfd8e3', false);   // wall
+      let bx = 300, by = gbot + 208;
+      if (c.phase === 'result') {
+        const o = c.result.outcome;
+        bx = o === 'WALL' ? 300 : o === 'WIDE' ? (c.aim < 2 ? gx0 - 30 : gx1 + 30) : zoneX(c.aim);
+        by = o === 'OVER' ? gtop - 22 : o === 'WALL' ? gbot + 95 : c.result.scored ? gbot - 30 : gbot - 6;
+      } else penFig(x, 300, gbot + 244, youCol, false);   // taker
+      x.fillStyle = '#fff'; x.beginPath(); x.arc(bx, by, 9, 0, 6.2832); x.fill();
+      x.fillStyle = 'rgba(20,30,24,0.9)'; x.beginPath(); x.arc(bx, by, 3, 0, 6.2832); x.fill();
+      if (c.phase === 'power') spMeter(x, c.power, 0.72);
+    } else {
+      const tx = [gx0 + 42, 300, gx1 - 42];
+      if (c.phase !== 'result') { x.save(); x.strokeStyle = 'rgba(88,214,255,0.9)'; x.lineWidth = 2.5; x.shadowColor = '#58d6ff'; x.shadowBlur = 8; x.beginPath(); x.arc(tx[c.aim], gbot + 30, 16, 0, 6.2832); x.stroke(); x.restore(); }
+      penFig(x, 300, gbot - 4, gkCol, true);
+      penFig(x, tx[0] + 12, gbot + 38, youCol, false); penFig(x, tx[2] - 12, gbot + 42, youCol, false);
+      penFig(x, 300, gbot + 28, oppCol, false); penFig(x, tx[1] + 26, gbot + 46, oppCol, false);
+      let bx = c.lr === 'L' ? 70 : 530, by = gtop - 28;
+      if (c.phase === 'result') { const o = c.result.outcome; bx = o === 'CLEARED' ? 300 : tx[c.aim]; by = o === 'OVER' ? gtop - 22 : o === 'CLEARED' ? gbot + 72 : c.result.scored ? gbot - 24 : gbot - 6; }
+      x.fillStyle = '#fff'; x.beginPath(); x.arc(bx, by, 8, 0, 6.2832); x.fill();
+      if (c.phase === 'timing') spMeter(x, c.power, 0.70);
+    }
+    if (c.phase === 'result') {
+      x.fillStyle = c.result.scored ? '#3ef08f' : '#ff5f6e'; x.textAlign = 'center'; x.font = '800 42px system-ui, sans-serif';
+      x.fillText(c.result.scored ? 'GOAL!' : c.result.outcome, 300, 360);
+    }
+  }
+  function spInstr() {
+    const c = game.sp; if (!c) return;
+    const top = $('sp-top'); if (top) top.textContent = (c.type === 'fk' ? 'Free Kick' : 'Corner') + ' · ' + teamObj('home').def.code;
+    let t;
+    if (c.phase === 'aim') t = c.type === 'fk' ? 'Swipe ← → to aim · pinch to set power' : 'Swipe ← → to pick the cross · pinch to deliver';
+    else if (c.phase === 'power') t = 'Pinch when the bar hits the green';
+    else if (c.phase === 'timing') t = 'Pinch to time your header — hit the green';
+    else t = c.result ? (c.result.scored ? 'GOAL!' : c.result.outcome) : '';
+    const el = $('sp-instr'); if (el) { el.textContent = t; el.classList.add('show'); }
+    const ch = $('sp-chip-tx'); if (ch) ch.textContent = c.phase === 'aim' ? (c.type === 'fk' ? 'AIM' : 'CROSS') : (c.type === 'corner' && c.phase === 'timing' ? 'HEAD' : 'SHOOT');
   }
 
   // ============================================================
@@ -3024,6 +3192,8 @@
       saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
       watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
       sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
+      setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
+      spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },
       injure: (id) => { const p = playerById(id); if (p) injurePlayer(p); },
       setStam: (id, v) => { const p = playerById(id); if (p) p.stam = v; },

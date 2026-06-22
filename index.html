@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=16">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
   <div id="app">
@@ -325,6 +325,20 @@
     </div>
 
     <!-- ============================================================ -->
+    <!-- SET PIECE (free kick / corner mini-game)                     -->
+    <!-- ============================================================ -->
+    <div id="setpiece" class="screen hidden">
+      <canvas id="sp-canvas" width="600" height="600"></canvas>
+      <div class="hud">
+        <div class="pen-top" id="sp-top">Free Kick</div>
+        <div class="commentary" id="sp-instr" style="bottom:120px;"></div>
+        <div class="action-row">
+          <div class="action-chip" id="sp-chip"><span class="action-ic">◎</span><span class="action-tx" id="sp-chip-tx">SHOOT</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
     <!-- HOW TO PLAY                                                   -->
     <!-- ============================================================ -->
     <div id="how" class="screen hidden">
@@ -383,6 +397,10 @@
           <span class="opt-label">Auto Substitutions</span>
           <span class="opt-value" id="opt-autosub">ON</span>
         </button>
+        <button class="opt-row focusable" data-action="toggle-setpieces">
+          <span class="opt-label">Set-Piece Mini-Games</span>
+          <span class="opt-value" id="opt-setpieces">ON</span>
+        </button>
         <button class="opt-row focusable" data-action="toggle-sound">
           <span class="opt-label">Sound</span>
           <span class="opt-value" id="opt-sound">ON</span>
@@ -399,6 +417,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

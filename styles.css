@@ -455,10 +455,10 @@ html, body {
   display: flex; align-items: center; justify-content: space-between;
   height: 64px; padding: 0 18px;
   background: var(--surface-2); border: 1.5px solid var(--line);
-  border-radius: 14px; cursor: pointer;
+  border-radius: 14px; cursor: pointer; color: var(--ink);
 }
 .opt-row:focus { transform: scale(1.02); }
-.opt-label { font-size: 17px; font-weight: 700; }
+.opt-label { font-size: 17px; font-weight: 700; color: var(--ink); }
 .opt-value { font-size: 17px; font-weight: 800; color: var(--grn); }
 .opt-row.danger .opt-value { color: var(--red); }
 
@@ -535,8 +535,8 @@ html, body {
 .cr-hist-champ { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; }
 
 /* shootout */
-#shootout { padding: 0; }
-#pen-canvas { position: absolute; inset: 0; width: 600px; height: 600px; }
+#shootout, #setpiece { padding: 0; }
+#pen-canvas, #sp-canvas { position: absolute; inset: 0; width: 600px; height: 600px; }
 .pen-top {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
   background: rgba(8,16,12,0.85); border: 1px solid var(--line); border-radius: 12px;

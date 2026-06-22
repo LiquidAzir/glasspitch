@@ -193,7 +193,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '2D', cam: 'Side', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -562,7 +562,7 @@
     const form = FORMATIONS[formKey] || FORMATIONS['4-3-3'];
     const captainIdx = form.findIndex(f => f.role === 'MID');     // armband on a central mid
     const mk = (over) => ({
-      side, x: 0, y: 0, vx: 0, vy: 0, heading: side === 'home' ? -Math.PI/2 : Math.PI/2,
+      side, x: 0, y: 0, vx: 0, vy: 0, heading: atkUp(side) ? -Math.PI/2 : Math.PI/2,
       speedR: 0.85 + t.r.PAC/100 * 0.32,
       tackleCd: 0, kickCd: 0, dashT: 0, runPhase: srand()*6.28, aiT: srand()*0.3,
       stam: 1, cards: 0,
@@ -672,7 +672,7 @@
     // attacking-normalised → world. HOME attacks up (ny=1 → y=0). AWAY attacks down (ny=1 → y=PL).
     const nx = f.nx, ny = f.ny;
     const x = nx * CFG.PW;
-    const y = side === 'home' ? CFG.PL * (1 - ny) : CFG.PL * ny;
+    const y = atkUp(side) ? CFG.PL * (1 - ny) : CFG.PL * ny;
     return { x, y };
   }
 
@@ -707,6 +707,11 @@
 
   function teamObj(side) { return side === 'home' ? game.home : game.away; }
   function otherSide(side) { return side === 'home' ? 'away' : 'home'; }
+  // Attacking direction. Teams switch ends at half time, so in the 2nd half each
+  // side attacks the opposite goal. atkUp(side)===true => attacking the y=0 (top) goal.
+  function atkUp(side) { return (side === 'home') !== (game.half === 2); }
+  function goalY(side) { return atkUp(side) ? 0 : CFG.PL; }       // the goal this side shoots at
+  function ownGoalY(side) { return atkUp(side) ? CFG.PL : 0; }    // the goal this side defends
   function allPlayers() { return game.home.players.concat(game.away.players); }
   function playerById(id) { return id == null ? null : allPlayers().find(p => p.id === id); }
 
@@ -719,10 +724,10 @@
         p.x = h.x; p.y = h.y; p.vx = 0; p.vy = 0; p.dashT = 0;
         // keep both teams in their own half for the kickoff
         if (fullKickoff) {
-          if (team.side === 'home') p.y = Math.max(p.y, CFG.PL/2 + (p.isGK ? 0 : 1.5));
+          if (atkUp(team.side)) p.y = Math.max(p.y, CFG.PL/2 + (p.isGK ? 0 : 1.5));   // own half = the end you defend
           else p.y = Math.min(p.y, CFG.PL/2 - (p.isGK ? 0 : 1.5));
         }
-        p.heading = team.side === 'home' ? -Math.PI/2 : Math.PI/2;
+        p.heading = atkUp(team.side) ? -Math.PI/2 : Math.PI/2;
         p.tackleCd = 0; p.kickCd = 0;
       });
     });
@@ -732,7 +737,7 @@
     // give the ball to a central midfielder of the kickoff team (robust to red cards)
     const ko = teamObj(kickoffTeam);
     const cm = ko.players.find(pl => pl.role === 'MID' && !pl.isGK) || ko.players.find(pl => !pl.isGK) || ko.players[0];
-    cm.x = CFG.PW/2; cm.y = CFG.PL/2 + (kickoffTeam === 'home' ? 1.2 : -1.2);
+    cm.x = CFG.PW/2; cm.y = CFG.PL/2 + (atkUp(kickoffTeam) ? 1.2 : -1.2);
     b.owner = cm.id; game.lastTouch = kickoffTeam; game.lastKicker = null; game.lastTouchPlayer = cm.id;
     // active = your carrier if you kick off, else your nearest to ball
     if (kickoffTeam === 'home') setActive(cm.id, true);
@@ -1008,10 +1013,10 @@
     }
   }
   function inShootRange(p) {
-    // distance to the goal HOME attacks (top, y=0)
-    const gy = 0, gx = CFG.PW/2;
+    const up = atkUp(p.side);
+    const gy = up ? 0 : CFG.PL, gx = CFG.PW/2;        // distance to the goal this side attacks
     const d = len(p.x - gx, p.y - gy);
-    return d < 30 && p.y < CFG.PL * 0.62;
+    return d < 30 && (up ? p.y < CFG.PL * 0.62 : p.y > CFG.PL * 0.38);
   }
   function switchActive() {
     const cands = game.home.players.filter(p => !p.isGK && p.id !== game.activeId);
@@ -1137,7 +1142,7 @@
     // Prevent carriers from dribbling toward their own goal (own-goals feel awful).
     // Respect explicit user steering — only clamp auto-momentum / AI movement.
     if (b.owner === p.id) {
-      const attackUp = p.side === 'home';
+      const attackUp = atkUp(p.side);
       const backward = attackUp ? mvy > 0.05 : mvy < -0.05;
       const userSteering = isActive && (performance.now() / 1000 - game.lastSteerT) < CFG.steerHold;
       if (backward && !userSteering) {
@@ -1233,7 +1238,7 @@
       else {
         dx = Math.cos(p.heading); dy = Math.sin(p.heading);
         // Prevent momentum from carrying the dribble toward own goal
-        const attackUp = p.side === 'home';
+        const attackUp = atkUp(p.side);
         if ((attackUp && dy > 0) || (!attackUp && dy < 0)) {
           dy = 0;
           if (Math.abs(dx) < 0.1) { dx = 0; dy = attackUp ? -1 : 1; } // default forward
@@ -1250,6 +1255,9 @@
     return { x: dx / n, y: dy / n, sprint: haveBall ? 1 : 1.06 };
   }
   function setSteer(x, y) {
+    // The 3D Side camera shows the pitch rotated 90°, so remap swipes to the screen:
+    // up → right goal (+y), down → left goal (-y), left/right → depth. (Net effect = negate.)
+    if (game.settings.gfx === '3D' && game.settings.cam === 'Side') { x = -x; y = -y; }
     const n = len(x, y) || 1;
     game.steer.x = x / n; game.steer.y = y / n;
     game.lastSteerT = performance.now() / 1000;
@@ -1267,7 +1275,7 @@
 
     // formation home, shifted by ball
     const h = homePos(p.side, form[p.idx], p);
-    const attackUp = p.side === 'home';
+    const attackUp = atkUp(p.side);
     // lateral shift toward ball, vertical shift by phase
     let tx = lerp(h.x, b.x, 0.28);
     const ballNy = attackUp ? (CFG.PL - b.y) / CFG.PL : b.y / CFG.PL; // 0..1 how advanced the ball is for this team
@@ -1340,7 +1348,7 @@
     // spectator: both sides react identically (fair); human game: your mates' sharpness scales with `mate`
     p.aiT = (game._allAI ? diff.react : (p.side === 'away' ? diff.react : 0.28 * (2 - diff.mate))) + rrange(0, 0.12);
 
-    const attackUp = p.side === 'home';
+    const attackUp = atkUp(p.side);
     const gx = CFG.PW/2, gy = attackUp ? 0 : CFG.PL;
     const goalDist = len(p.x - gx, p.y - gy);
     const t = teamObj(p.side).def;
@@ -1383,7 +1391,7 @@
 
   function bestPassTarget(p) {
     const mates = teamObj(p.side).players;
-    const attackUp = p.side === 'home';
+    const attackUp = atkUp(p.side);
     let best = null, bs = -1;
     for (const m of mates) {
       if (m === p || m.isGK) continue;
@@ -1465,7 +1473,8 @@
   }
   function pickForwardMate(p) {
     const mates = game.home.players.filter(m => m !== p && !m.isGK);
-    mates.sort((a,b) => a.y - b.y); // smallest y = most advanced (home attacks up)
+    const up = atkUp('home');
+    mates.sort((a,b) => up ? a.y - b.y : b.y - a.y); // most advanced toward the attacking goal
     return mates[0];
   }
   function doShoot(p) {
@@ -1474,7 +1483,7 @@
   }
   function kickToGoal(p, side, aimX, acc) {
     game.stats.shots[side]++;
-    const attackUp = side === 'home';
+    const attackUp = atkUp(side);
     const gy = attackUp ? 0 : CFG.PL;
     const goalDist = len(p.x - CFG.PW/2, p.y - gy);
     // aim toward a post based on steer (player skill); AI aims away from keeper
@@ -1647,14 +1656,14 @@
   }
   function keeperLogic(gk, side, dt) {
     const b = game.ball;
-    const lineY = side === 'home' ? CFG.PL - 0.6 : 0.6;     // own goal line
-    const ownGoalUp = side === 'away';                       // away defends top (y=0)
+    const lineY = atkUp(side) ? CFG.PL - 0.6 : 0.6;        // own goal line (defends the far end)
+    const ownGoalUp = !atkUp(side);                          // true => defends the top (y=0) goal
     // track ball x, clamped to the goal mouth (+a little)
     let tx = clamp(b.x, CFG.PW/2 - CFG.goalHalfW - 1.5, CFG.PW/2 + CFG.goalHalfW + 1.5);
     let ty = lineY;
     // come off the line a touch if the ball is close & in the box
-    const inBox = (side === 'home') ? b.y > CFG.PL - CFG.boxD : b.y < CFG.boxD;
-    if (inBox) ty = side === 'home' ? CFG.PL - 2.2 : 2.2;
+    const inBox = atkUp(side) ? b.y > CFG.PL - CFG.boxD : b.y < CFG.boxD;
+    if (inBox) ty = atkUp(side) ? CFG.PL - 2.2 : 2.2;
     const maxV = CFG.playerMax * 0.95;
     const latMax = CFG.playerMax * 0.6;   // limited lateral reach — well-placed corner shots beat the keeper
     gk.vx = approach(gk.vx, clamp((tx - gk.x) * 4, -latMax, latMax), CFG.playerAccel * dt);
@@ -1664,7 +1673,7 @@
 
     // grab / save balls near the goal (height-gated so high shots beat the keeper)
     if (b.owner == null && b.z <= CFG.catchH) {
-      const inArea = (side === 'home') ? (b.y > CFG.PL - 9) : (b.y < 9);   // claim only near the goal
+      const inArea = atkUp(side) ? (b.y > CFG.PL - 9) : (b.y < 9);   // claim only near the goal
       const reach = 1.9 + (teamObj(side).def.r.GK/100 - 0.7) * 2.4;   // better keepers dive further
       if (inArea && dist(gk, b) < reach && !(game.lastKicker === gk.id && gk.kickCd > 0)) {
         const wasShot = game._lastWasShot && len(b.vx, b.vy) > 9;
@@ -1683,7 +1692,7 @@
     }
     // dribble/hold then distribute
     if (b.owner === gk.id) {
-      const tgx = gk.x, tgy = gk.y + (side === 'home' ? -0.8 : 0.8);
+      const tgx = gk.x, tgy = gk.y + (atkUp(side) ? -0.8 : 0.8);
       b.x = tgx; b.y = tgy; b.vx = 0; b.vy = 0;
       gk._holdT = (gk._holdT || 0) + dt;
       if (gk._holdT > 0.5) { gk._holdT = 0; keeperDistribute(gk, side); }
@@ -1695,7 +1704,7 @@
     let best = null, bs = -1;
     for (const m of mates) {
       const open = nearestOppToPoint(m, side);
-      const adv = side === 'home' ? (CFG.PL - m.y) : m.y;
+      const adv = atkUp(side) ? (CFG.PL - m.y) : m.y;
       const s = open * 0.6 + adv * 0.2 - dist(gk, m) * 0.1;
       if (s > bs) { bs = s; best = m; }
     }
@@ -1711,26 +1720,29 @@
     // Note: we check the BALL against the lines even when it is owned — a player
     // can dribble it out of play (throw-in/goal-kick) or dribble it into the net.
 
-    // GOAL LINES (top y=0 → HOME scores; bottom y=PL → AWAY scores)
+    // GOAL LINES — teams switch ends at half time, so which side attacks each goal
+    // flips. upTeam = the side currently attacking the top (y=0) goal.
     const withinPosts = Math.abs(b.x - CFG.PW/2) < CFG.goalHalfW;
-    if (_prevBall.y > 0 && b.y <= 0) {
+    const upTeam = atkUp('home') ? 'home' : 'away';
+    const downTeam = otherSide(upTeam);
+    if (_prevBall.y > 0 && b.y <= 0) {                       // ball at the top (y=0) goal
       if (withinPosts) {
-        if (b.z > CFG.crossbarH) { overBar('home'); return; }
+        if (b.z > CFG.crossbarH) { overBar(upTeam); return; }
         if (nearPost(b.x)) { postBounce(true); return; }
-        return scoreGoal('home');
+        return scoreGoal(upTeam);
       }
-      if (game._lastWasShot && game.lastTouch === 'home') { say(pick(['Just wide!', 'Inches away!', 'So close!'])); game._lastWasShot = false; }
-      if (game.lastTouch === 'home') goalKick('away'); else cornerKick('home', b.x < CFG.PW/2 ? 'L' : 'R', true);
+      if (game._lastWasShot && game.lastTouch === upTeam) { say(pick(['Just wide!', 'Inches away!', 'So close!'])); game._lastWasShot = false; }
+      if (game.lastTouch === upTeam) goalKick(downTeam); else cornerKick(upTeam, b.x < CFG.PW/2 ? 'L' : 'R', true);
       return;
     }
-    if (_prevBall.y < CFG.PL && b.y >= CFG.PL) {
+    if (_prevBall.y < CFG.PL && b.y >= CFG.PL) {             // ball at the bottom (y=PL) goal
       if (withinPosts) {
-        if (b.z > CFG.crossbarH) { overBar('away'); return; }
+        if (b.z > CFG.crossbarH) { overBar(downTeam); return; }
         if (nearPost(b.x)) { postBounce(false); return; }
-        return scoreGoal('away');
+        return scoreGoal(downTeam);
       }
-      if (game._lastWasShot && game.lastTouch === 'away') { say(pick(['Just wide!', 'Inches away!', 'So close!'])); game._lastWasShot = false; }
-      if (game.lastTouch === 'away') goalKick('home'); else cornerKick('away', b.x < CFG.PW/2 ? 'L' : 'R', false);
+      if (game._lastWasShot && game.lastTouch === downTeam) { say(pick(['Just wide!', 'Inches away!', 'So close!'])); game._lastWasShot = false; }
+      if (game.lastTouch === downTeam) goalKick(upTeam); else cornerKick(downTeam, b.x < CFG.PW/2 ? 'L' : 'R', false);
       return;
     }
     // SIDELINES → throw-in to the team that didn't touch it last
@@ -1810,7 +1822,7 @@
     b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.owner = null; b.shot = false; game._lastWasShot = false;
     _prevBall.x = b.x; _prevBall.y = b.y;
     const taker = nearestOfSide(toSide, b, true) || teamObj(toSide).players[0];
-    taker.x = b.x; taker.y = b.y + (toSide === 'home' ? 0.8 : -0.8);
+    taker.x = b.x; taker.y = b.y + (atkUp(toSide) ? 0.8 : -0.8);
     taker.vx = 0; taker.vy = 0;
     b.owner = taker.id; game.lastTouch = toSide; game.lastKicker = null; game.lastTouchPlayer = taker.id;
     if (toSide === 'home') setActive(taker.id, true);
@@ -1825,11 +1837,11 @@
   }
   function throwIn(toSide, y, x) { restartAt(toSide, x, y, 'Throw-in', false); }
   function goalKick(toSide) {
-    const y = toSide === 'home' ? CFG.PL - CFG.sixD : CFG.sixD;
+    const y = atkUp(toSide) ? CFG.PL - CFG.sixD : CFG.sixD;
     restartAt(toSide, CFG.PW/2 + rrange(-6,6), y, 'Goal kick', true);
   }
   function cornerKick(toSide, lr, topGoal) {
-    if (canSetPiece(toSide) && topGoal) { triggerSetPiece('corner', lr); return; }   // your corner → mini-game
+    if (canSetPiece(toSide)) { triggerSetPiece('corner', lr); return; }   // your corner → mini-game (either end)
     const x = lr === 'L' ? 1 : CFG.PW - 1;
     const y = topGoal ? 1 : CFG.PL - 1;
     restartAt(toSide, x, y, 'Corner', true);
@@ -2164,8 +2176,9 @@
   function canSetPiece(side) {
     return side === 'home' && game.settings.setPieces && !game._allAI && !game.watching && game.matchMode !== 'tutorial';
   }
-  function isShootingFK(x, y) {            // home attacks up (goal y=0): close & central = shootable
-    return y < 30 && Math.abs(x - CFG.PW/2) < 24;
+  function isShootingFK(x, y) {            // close & central to the goal HOME currently attacks
+    const up = atkUp('home');
+    return (up ? y < 30 : y > CFG.PL - 30) && Math.abs(x - CFG.PW/2) < 24;
   }
   function triggerSetPiece(type, a, b) {
     const taker = game.home.players.filter(p => !p.isGK).slice().sort((u, v) => (v.stam || 1) - (u.stam || 1))[0] || game.home.players[0];
@@ -3040,8 +3053,9 @@
     if (ap && ap.side === 'home' && b.owner === ap.id && game.phase === 'play') {
       if (inShootRange(ap)) {
         const tx = clamp(CFG.PW / 2 + game.steer.x * (CFG.goalHalfW - 0.4), CFG.PW / 2 - CFG.goalHalfW + 0.3, CFG.PW / 2 + CFG.goalHalfW - 0.3);
-        setAimLine3D(ap.x, ap.y, tx, 0, '#58d6ff');
-        r.aimMarker.position.set(tx - 44, 0.07, 0 - 52.5); r.aimMarker.material.color.set('#58d6ff'); show = true;
+        const gy = goalY(ap.side);
+        setAimLine3D(ap.x, ap.y, tx, gy, '#58d6ff');
+        r.aimMarker.position.set(tx - 44, 0.07, gy - 52.5); r.aimMarker.material.color.set('#58d6ff'); show = true;
       } else {
         const m = homePassTarget(ap);
         if (m) { setAimLine3D(ap.x, ap.y, m.x, m.y, '#3ef08f'); r.aimMarker.position.set(m.x - 44, 0.07, m.y - 52.5); r.aimMarker.material.color.set('#3ef08f'); show = true; }
@@ -3106,10 +3120,10 @@
         const tx = clamp(CFG.PW/2 + aim*(CFG.goalHalfW-0.4), CFG.PW/2-CFG.goalHalfW+0.3, CFG.PW/2+CFG.goalHalfW-0.3);
         ctx.save();
         ctx.strokeStyle = 'rgba(88,214,255,0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([5,5]);
-        ctx.beginPath(); ctx.moveTo(wx(p.x), wy(p.y)); ctx.lineTo(wx(tx), wy(0)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx(p.x), wy(p.y)); ctx.lineTo(wx(tx), wy(goalY(p.side))); ctx.stroke();
         ctx.setLineDash([]);
         ctx.strokeStyle = 'rgba(88,214,255,0.95)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(wx(tx), wy(0), 7, 0, 6.2832); ctx.stroke();
+        ctx.beginPath(); ctx.arc(wx(tx), wy(goalY(p.side)), 7, 0, 6.2832); ctx.stroke();
         ctx.restore();
       } else {
         const m = homePassTarget(p);          // preview matches the facing-aware pass
@@ -3524,6 +3538,7 @@
       sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
       gfx: (v) => { game.settings.gfx = v || '3D'; updateHudLayout(); if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
       cam: (v) => { game.settings.cam = v || 'Side'; applyCam(); updateHudLayout(); render(); }, toggleCam: () => toggleCam(),
+      half: () => game.half, secondHalf: () => startSecondHalf(), atkUp: (s) => atkUp(s),
       setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
       spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },

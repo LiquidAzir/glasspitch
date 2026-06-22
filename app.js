@@ -1255,9 +1255,11 @@
     return { x: dx / n, y: dy / n, sprint: haveBall ? 1 : 1.06 };
   }
   function setSteer(x, y) {
-    // The 3D Side camera shows the pitch rotated 90°, so remap swipes to the screen:
-    // up → right goal (+y), down → left goal (-y), left/right → depth. (Net effect = negate.)
-    if (game.settings.gfx === '3D' && game.settings.cam === 'Side') { x = -x; y = -y; }
+    // The 3D Side camera views the pitch from the touchline, so the swipe axes are
+    // rotated 90° vs the top-down sim. Map swipes to the SCREEN (measured projection):
+    //   up → far touchline (sim x+ / screen-up), down → toward camera (sim x- / "closer to me"),
+    //   left → left goal (sim y-), right → right goal (sim y+).  (x,y) -> (-y, x).
+    if (game.settings.gfx === '3D' && game.settings.cam === 'Side') { const t = x; x = -y; y = t; }
     const n = len(x, y) || 1;
     game.steer.x = x / n; game.steer.y = y / n;
     game.lastSteerT = performance.now() / 1000;

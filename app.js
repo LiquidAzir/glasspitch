@@ -1094,23 +1094,22 @@
     game.netRipple.away = Math.max(0, game.netRipple.away - dt);
   }
 
-  // ----- active player selection (auto-switch with hysteresis) -----
+  // ----- active player selection (TAP-driven, not automatic) -----
+  // Switching is manual (tap → onPinch → switchActive). While your team doesn't have
+  // the ball, control STAYS on your player so a silent auto-switch never hijacks your
+  // swipes / changes the player's direction under you. We only re-pick automatically
+  // when your team gains possession (control the carrier) or the current pick is
+  // invalid (none / GK / subbed off / sent off).
   function chooseActive(dt) {
     game.activeLockT = Math.max(0, game.activeLockT - dt);
     const b = game.ball;
     const owner = playerById(b.owner);
-    if (owner && owner.side === 'home') { game.activeId = owner.id; return; } // you have it
-    if (game.activeLockT > 0) return;                                          // manual lock
-    // pick your outfielder with least time-to-ball, with hysteresis
-    let best = null, bt = 1e9;
-    for (const p of game.home.players) {
-      if (p.isGK) continue;
-      const t = timeToBall(p);
-      if (t < bt) { bt = t; best = p; }
-    }
+    if (owner && owner.side === 'home') { game.activeId = owner.id; return; }   // your team has it → control the carrier
     const cur = playerById(game.activeId);
-    if (!cur || cur.isGK || cur.side !== 'home') { if (best) game.activeId = best.id; return; }
-    if (best && best.id !== cur.id && timeToBall(cur) > bt + 0.35) game.activeId = best.id;
+    if (cur && !cur.isGK && cur.side === 'home') return;                         // keep your current player (tap to switch)
+    let best = null, bt = 1e9;                                                   // fallback only: no valid active player
+    for (const p of game.home.players) { if (p.isGK) continue; const t = timeToBall(p); if (t < bt) { bt = t; best = p; } }
+    if (best) game.activeId = best.id;
   }
 
   // ----- per-player update -----

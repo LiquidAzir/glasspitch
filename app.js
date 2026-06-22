@@ -42,11 +42,20 @@
   // sim-seconds per half (45 sim-min = 2700s) and the real time it takes
   const HALF_SIM = 2700;
   const LENGTHS = { Short: 90, Normal: 165, Long: 300 };          // real seconds / half (≈3 / 5.5 / 10 min matches)
+  // spd = opponent move speed, react = opponent decision delay (lower = sharper),
+  // pass/shot = opponent accuracy, press = opponent pressing intensity, tackle = opponent
+  // tackle/dispossess strength, mate = YOUR AI team-mates' competence (higher = better helpers).
+  // Normal is the neutral baseline (all multipliers ~1) so its balance is unchanged.
   const DIFFS = {
-    Easy:   { spd: 0.92, pass: 0.80, shot: 0.78, react: 0.45, press: 0.80, tackle: 0.85, mate: 1.04 },
+    Easy:   { spd: 0.93, pass: 0.78, shot: 0.74, react: 0.52, press: 0.78, tackle: 0.82, mate: 1.10 },
     Normal: { spd: 1.00, pass: 0.88, shot: 0.86, react: 0.30, press: 1.00, tackle: 1.00, mate: 1.00 },
-    Hard:   { spd: 1.06, pass: 0.94, shot: 0.93, react: 0.18, press: 1.18, tackle: 1.12, mate: 0.98 },
+    Hard:   { spd: 1.06, pass: 0.94, shot: 0.93, react: 0.16, press: 1.22, tackle: 1.14, mate: 0.93 },
+    Pro:    { spd: 1.11, pass: 0.975, shot: 0.97, react: 0.08, press: 1.42, tackle: 1.24, mate: 0.86 },
   };
+  const DIFF_KEYS = ['Easy', 'Normal', 'Hard', 'Pro'];
+  // team mentality (your coaching choice) — shifts how high the whole side plays
+  const MENTALITY = { Defensive: -0.12, Balanced: 0, Attacking: 0.14 };
+  const MENTALITY_KEYS = ['Defensive', 'Balanced', 'Attacking'];
 
   // ============================================================
   // TEAMS — fictional, distinct kits (bright on additive display) + ratings
@@ -178,7 +187,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -252,6 +261,7 @@
       $('pause-score').textContent = scoreLine();
       $('sound-toggle-btn').textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
       $('touch-toggle-btn').textContent = 'Touch Controls: ' + (game.settings.touch ? 'ON' : 'OFF');
+      renderPauseTactics();
     }
     else if (id === 'halftime') { $('ht-score').textContent = scoreLine(); renderStatGrid($('ht-stats')); }
     else if (id === 'result') renderResult();
@@ -294,7 +304,7 @@
   function serializeMatch() {
     if (!game.home || !game.away || !game.ball || !game.stats) return null;
     if (game.matchMode === 'tutorial' || game.phase === 'ended') return null;
-    const serTeam = (t) => ({ teamId: t.teamId, side: t.side, score: t.score, formKey: t.formKey,
+    const serTeam = (t) => ({ teamId: t.teamId, side: t.side, score: t.score, formKey: t.formKey, mentality: t.mentality,
       players: t.players.map(p => ({ ...p })) });             // players are all primitives → plain copy
     return {
       v: 2,
@@ -315,6 +325,7 @@
       const rebuild = (sd) => ({
         teamId: sd.teamId, side: sd.side, def: teamById(sd.teamId), score: sd.score || 0,
         formKey: sd.formKey, form: FORMATIONS[sd.formKey] || FORMATIONS['4-3-3'],
+        mentality: sd.mentality || 'Balanced',
         players: sd.players.map(p => ({ ...p })),
       });
       game.home = rebuild(snap.home);
@@ -374,6 +385,11 @@
     const r = game.record;
     $('opt-record').textContent = `${r.w}-${r.d}-${r.l}`;
   }
+  // in-match coach panel (shown on the pause screen)
+  function renderPauseTactics() {
+    const f = $('pause-formation'); if (f) f.textContent = (game.home && game.home.formKey) || game.settings.formation;
+    const m = $('pause-mentality'); if (m) m.textContent = (game.home && game.home.mentality) || game.settings.mentality || 'Balanced';
+  }
 
   function crestStyle(t) {
     return `background:linear-gradient(150deg, ${t.col} 0%, ${shade(t.col,-0.35)} 100%); color:${pickInk(t.col)}; --crest-glow:${hexA(t.col,0.45)};`;
@@ -381,10 +397,11 @@
   function renderTeamSelect() {
     const ts = game.ts;
     const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career';
-    $('ts-title').textContent = tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : 'Select';
-    $('ts-random').classList.toggle('hidden', tour || ts.step === 0);
+    const watch = ts.mode === 'watch';
+    $('ts-title').textContent = watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : watch ? 'WATCH' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : 'Select';
+    $('ts-random').classList.toggle('hidden', tour || watch || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
     crest.textContent = t.glyph;
@@ -399,6 +416,7 @@
         <span class="rt-val">${v}</span></div>`;
     }).join('');
     $('ts-dots').innerHTML = TEAMS.map((_, i) => `<span class="ts-dot ${i===ts.idx?'on':''}"></span>`).join('');
+    const dEl = $('ts-diff'); if (dEl) { dEl.classList.toggle('hidden', watch); dEl.textContent = `Difficulty · ${game.settings.difficulty}`; }
   }
   function tsMove(d) {
     game.ts.idx = (game.ts.idx + d + TEAMS.length) % TEAMS.length;
@@ -409,6 +427,11 @@
     if (ts.mode === 'cup') { ts.mode = null; startCup(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'league') { ts.mode = null; startLeague(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'career') { ts.mode = null; startCareer(TEAMS[ts.idx].id); return; }
+    if (ts.mode === 'watch') {
+      if (ts.step === 0) { ts.you = TEAMS[ts.idx].id; ts.step = 1; ts.idx = (ts.idx + 1) % TEAMS.length; renderTeamSelect(); }
+      else { ts.mode = null; startWatchMatch(ts.you, TEAMS[ts.idx].id); }
+      return;
+    }
     if (ts.step === 0) {
       ts.you = TEAMS[ts.idx].id;
       ts.step = 1;
@@ -419,6 +442,16 @@
       ts.opp = TEAMS[ts.idx].id;
       startMatch(ts.you, ts.opp);
     }
+  }
+  function startWatchFlow() {
+    game.ts.mode = 'watch'; game.ts.step = 0;
+    game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+    navigateTo('team-select');
+  }
+  function startWatchMatch(aId, bId) {
+    if (!bId || bId === aId) { let i; do { i = Math.floor(srand()*TEAMS.length); } while (TEAMS[i].id === aId); bId = TEAMS[i].id; }
+    startMatch(aId, bId, 'watch');
+    enterWatch();
   }
   function tsRandom() {
     let i; do { i = Math.floor(srand() * TEAMS.length); } while (TEAMS[i].id === game.ts.you);
@@ -469,7 +502,14 @@
       speedR: 0.85 + t.r.PAC/100 * 0.32,
       tackleCd: 0, kickCd: 0, dashT: 0, runPhase: srand()*6.28, aiT: srand()*0.3,
     }));
-    return { teamId, side, def: t, score: 0, players, form, formKey };
+    return { teamId, side, def: t, score: 0, players, form, formKey, mentality: 'Balanced' };
+  }
+  // swap a team's shape live (coach changes formation mid-match). Players keep their
+  // numbers/identity; only their role + formation target move, so they drift into the new shape.
+  function setTeamFormation(team, formKey) {
+    const form = FORMATIONS[formKey]; if (!form || !team) return;
+    team.formKey = formKey; team.form = form;
+    team.players.forEach((pl, i) => { const f = form[i]; if (!f) return; pl.role = f.role; pl.nx = f.nx; pl.ny = f.ny; });
   }
   // formation home position in WORLD coords for a side
   function homePos(side, f, p) {
@@ -485,6 +525,7 @@
     game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
+    game.home.mentality = game.settings.mentality || 'Balanced';   // your coaching choice carries in
     assignKitColors();                              // away gets a change strip if the colours clash
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
     game.clockSec = 0; game.half = 1; game.phase = 'play';
@@ -604,6 +645,7 @@
       if (DIRV[key]) {
         recordCombo(key);
         if (game.screen !== 'match') { e.preventDefault(); return; } // combo opened pause
+        if (game.watching) exitWatch(true);                          // a swipe takes control back from the AI
         if (game.tutorial) game.tutorial.steerCount++;
         game.keys[key] = true; game.tapped[key] = true; e.preventDefault(); return;
       }
@@ -691,6 +733,11 @@
       case 'career-tab-table': game.career.tab = 'table'; renderCareer(); break;
       case 'career-tab-scorers': game.career.tab = 'scorers'; renderCareer(); break;
       case 'career-tab-history': game.career.tab = 'history'; renderCareer(); break;
+      case 'goto-watch': startWatchFlow(); break;
+      case 'watch-toggle': enterWatch(); resumeMatch(); break;     // hand the match to the AI and step away
+      case 'cup-watch': cupPlay(); enterWatch(); break;
+      case 'league-watch': leaguePlay(); enterWatch(); break;
+      case 'career-watch': if (game.career && !game.career.cur.done) { careerPlay(); enterWatch(); } break;
       case 'goto-how': navigateTo('how'); break;
       case 'start-tutorial': startTutorial(); break;
       case 'goto-settings': navigateTo('settings'); break;
@@ -699,17 +746,33 @@
       case 'team-next': tsMove(+1); break;
       case 'team-confirm': tsConfirm(); break;
       case 'team-random': tsRandom(); break;
-      case 'cycle-difficulty': cycle('difficulty', ['Easy','Normal','Hard']); break;
+      case 'ts-cycle-difficulty': cycle('difficulty', DIFF_KEYS); renderTeamSelect(); break;
+      case 'cycle-difficulty': cycle('difficulty', DIFF_KEYS); break;
       case 'cycle-length': cycle('length', ['Short','Normal','Long']); break;
       case 'cycle-formation': cycle('formation', FORMATION_KEYS); break;
       case 'toggle-sound': toggleSound(); break;
       case 'menu-touch-toggle': showTouch(!game.settings.touch); break;
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
       case 'resume': resumeMatch(); break;
+      case 'pause-cycle-formation': {
+        if (!game.home) break;
+        const i = FORMATION_KEYS.indexOf(game.home.formKey);
+        const next = FORMATION_KEYS[(i + 1) % FORMATION_KEYS.length];
+        setTeamFormation(game.home, next);
+        game.settings.formation = next; saveStore(); saveMatch(); renderPauseTactics();
+        break;
+      }
+      case 'pause-cycle-mentality': {
+        if (!game.home) break;
+        const i = MENTALITY_KEYS.indexOf(game.home.mentality || 'Balanced');
+        const next = MENTALITY_KEYS[(i + 1) % MENTALITY_KEYS.length];
+        game.home.mentality = next; game.settings.mentality = next; saveStore(); saveMatch(); renderPauseTactics();
+        break;
+      }
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
-      case 'quit-title': saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
+      case 'quit-title': exitWatch(false); saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
     }
   }
   function cycle(key, vals) {
@@ -726,6 +789,9 @@
     const b = $('sound-toggle-btn'); if (b) b.textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
   }
   function resumeMatch() { game.guardUntil = performance.now() + 200; navigateTo('match', { addToHistory:false }); }
+  // ----- spectator / watch mode: the AI plays both sides; any input hands control back -----
+  function enterWatch() { game.watching = true; game._allAI = true; }
+  function exitWatch(announce) { if (!game.watching && !game._allAI) return; game.watching = false; game._allAI = false; if (announce) say('You have control.'); }
   function startSecondHalf() {
     game.half = 2; game.clockSec = HALF_SIM; game.phase = 'play';
     game.kickoffTeam = 'home';
@@ -740,6 +806,7 @@
   // ============================================================
   function onPinch() {
     if (game.tutorial && game.tutorial.step === TUT_STEPS.length - 1) { finishTutorial(); return; }
+    if (game.watching) { exitWatch(true); return; }                  // pinch takes control back from the AI
     if (game.phase !== 'play') return;
     const p = playerById(game.activeId); if (!p) return;
     const b = game.ball;
@@ -806,7 +873,12 @@
     game.poss[pside] += dt;
 
     chooseActive(dt);
-    for (const p of allPlayers()) updatePlayer(p, dt);
+    // alternate which side updates first each frame so neither gets a systematic
+    // first-mover edge in 50/50s (keeps AI-vs-AI fair and end-to-end)
+    const order = (game._updTick = (game._updTick || 0) + 1) % 2
+      ? game.home.players.concat(game.away.players)
+      : game.away.players.concat(game.home.players);
+    for (const p of order) updatePlayer(p, dt);
     tickDispossess(dt);
     updateBall(dt);
     updateKeepers(dt);
@@ -884,7 +956,8 @@
     // Momentum-aware steering: rotate the velocity toward the desired direction
     // (curved turns) and ease the speed — feels fluid instead of snapping.
     const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;
-    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * (b.owner === p.id ? 0.95 : 1);
+    const diffSpd = (p.side === 'away' && !game._allAI) ? DIFFS[game.settings.difficulty].spd : 1;   // harder = quicker opponents (fair in spectator mode)
+    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * diffSpd * (b.owner === p.id ? 0.95 : 1);
     const moveLen = len(mvx, mvy);
     let curSpeed = len(p.vx, p.vy);
     if (moveLen > 0.01) {
@@ -993,6 +1066,8 @@
     const b = game.ball;
     const owner = playerById(b.owner);
     const team = teamObj(p.side);
+    const diff = DIFFS[game.settings.difficulty];
+    const pressMul = (p.side === 'away' && !game._allAI) ? diff.press : 1;   // difficulty only buffs the opponent's press (fair in spectator mode)
     const weHaveBall = owner && owner.side === p.side;
     const form = teamObj(p.side).form;
 
@@ -1005,6 +1080,11 @@
     let push = weHaveBall ? 0.16 : -0.12;
     if (p.role === 'FWD') push += weHaveBall ? 0.10 : 0.04;
     if (p.role === 'DEF') push -= weHaveBall ? 0.02 : 0.06;
+    push += (MENTALITY[team.mentality] || 0);                  // coach mentality: how high the side plays
+    if (game._allAI) {                                         // spectator: trailing side commits forward, leader sits in → closer, watchable games
+      const deficit = teamObj(otherSide(p.side)).score - team.score;
+      push += clamp(deficit * 0.07, -0.06, 0.18);
+    }
     let ny = clamp(form[p.idx].ny + push + (ballNy - 0.5) * 0.5, 0.05, 0.95);
     let ty = attackUp ? CFG.PL * (1 - ny) : CFG.PL * ny;
 
@@ -1020,11 +1100,11 @@
     } else if (!weHaveBall && closest === 0) {
       // primary presser — close in goal-side and actually challenge for the ball
       const ox = owner.x, oy = owner.y;
-      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y; sprint = 1.02;
-    } else if (!weHaveBall && closest === 1 && dist(p, b) < 28) {
+      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y; sprint = 1.02 * pressMul;
+    } else if (!weHaveBall && closest === 1 && dist(p, b) < 28 * pressMul) {
       // second man — CONTAIN: sit ~5m goal-side, cut the forward lane, don't swarm
       const ox = owner.x, oy = owner.y;
-      dx = (ox * 0.45 + tx * 0.55) - p.x; dy = (oy + Math.sign(gy - oy) * 5.0) - p.y; sprint = 0.95;
+      dx = (ox * 0.45 + tx * 0.55) - p.x; dy = (oy + Math.sign(gy - oy) * 5.0) - p.y; sprint = 0.95 * pressMul;
     } else if (weHaveBall && p.role === 'FWD' && srandHash(p.idx, b) ) {
       // make a forward run into space ahead of the ball (toward the attacking goal)
       dx = tx - p.x; dy = (ty + (attackUp ? -4 : 4)) - p.y;
@@ -1062,12 +1142,24 @@
     p.aiT -= dt;
     if (p.aiT > 0) return;
     const diff = DIFFS[game.settings.difficulty];
-    p.aiT = (p.side === 'away' ? diff.react : 0.28) + rrange(0, 0.12);
+    // away reacts per difficulty; your team-mates react better/worse by the `mate` factor
+    // spectator: both sides react identically (fair); human game: your mates' sharpness scales with `mate`
+    p.aiT = (game._allAI ? diff.react : (p.side === 'away' ? diff.react : 0.28 * (2 - diff.mate))) + rrange(0, 0.12);
 
     const attackUp = p.side === 'home';
     const gx = CFG.PW/2, gy = attackUp ? 0 : CFG.PL;
     const goalDist = len(p.x - gx, p.y - gy);
     const t = teamObj(p.side).def;
+
+    // pressured deep in our own third → clear it long downfield (relieves pressure and
+    // springs end-to-end play instead of getting pinned in by a high press).
+    const ownThird = attackUp ? (p.y > CFG.PL * 0.72) : (p.y < CFG.PL * 0.28);
+    if (ownThird && !p.isGK && nearestOpponentDist(p) < 6.0) {
+      const tx = clamp(p.x + rrange(-14, 14), 5, CFG.PW - 5);
+      const ty = attackUp ? CFG.PL * 0.40 : CFG.PL * 0.60;     // hoof it out past the halfway line
+      kickTo(p, tx, ty, false, 0.7);
+      return;
+    }
 
     // shoot? (arcade: shoot readily once in range)
     const inRange = goalDist < 30 && (attackUp ? p.y < CFG.PL*0.58 : p.y > CFG.PL*0.42);
@@ -1130,12 +1222,17 @@
   }
 
   // ----- kicks -----
-  function aiShoot(p) { kickToGoal(p, p.side, 0.0, DIFFS[game.settings.difficulty]); }
+  function aiShoot(p) {
+    const diff = DIFFS[game.settings.difficulty];
+    const shot = (game._allAI || p.side === 'away') ? diff.shot : clamp(diff.shot * diff.mate, 0.6, 0.99);
+    kickToGoal(p, p.side, 0.0, { shot });
+  }
   function aiPass(p, mate) {
     const diff = DIFFS[game.settings.difficulty];
     const lead = 0.28;
     const tx = mate.x + mate.vx * lead, ty = mate.y + mate.vy * lead;
-    kickTo(p, tx, ty, false, diff.pass);
+    const skill = (game._allAI || p.side === 'away') ? diff.pass : clamp(0.86 * diff.mate, 0.6, 0.99);   // your mates pass better on easier modes
+    kickTo(p, tx, ty, false, skill);
     if (p.side === 'away') {} // away: control follows ball naturally
   }
 
@@ -1272,7 +1369,8 @@
     let rate = (0.4 + (defR - 0.6) * 2.0) * (1 - pd / CFG.tackleR);   // ramps up the closer they get
     rate *= clamp(1.15 - (carR - 0.6), 0.6, 1.35);                   // skilled carriers shield better
     if (carrier.dashT > 0) rate *= 0.4;                              // a dash buys a moment
-    rate *= (carrier.side === 'home') ? diff.tackle : (2 - diff.tackle);  // difficulty scales the human's opponent
+    if (game._allAI) rate *= 0.6;                                    // spectator: fewer turnovers → settled, end-to-end play
+    else rate *= (carrier.side === 'home') ? diff.tackle : (2 - diff.tackle);  // difficulty scales the human's opponent
     if (srand() < rate * dt) knockLoose(carrier, presser);
   }
   function knockLoose(carrier, presser) {
@@ -1518,7 +1616,7 @@
     if (pushBack) {
       for (const o of teamObj(otherSide(toSide)).players) {
         if (o.isGK) continue;
-        if (dist(o, b) < 5) { const dx=o.x-b.x, dy=o.y-b.y, n=len(dx,dy)||1; o.x=b.x+dx/n*5; o.y=b.y+dy/n*5; }
+        if (dist(o, b) < 7.5) { const dx=o.x-b.x, dy=o.y-b.y, n=len(dx,dy)||1; o.x=b.x+dx/n*7.5; o.y=b.y+dy/n*7.5; }   // give the taker room to play out
       }
     }
     game.phase = 'restart'; game.phaseT = CFG.restartPause;
@@ -1544,13 +1642,17 @@
   function goFulltime() {
     game.phase = 'ended';
     clearMatch();                                  // match over — no longer resumable
+    const wasWatch = game.matchMode === 'watch';
+    game.watching = false; game._allAI = false;    // leave spectator mode at the whistle
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
     if (game.matchMode === 'career') { onCareerMatchEnd(); return; }
-    const hs = game.home.score, as = game.away.score;
-    if (hs > as) game.record.w++; else if (hs < as) game.record.l++; else game.record.d++;
-    saveStore();
+    if (!wasWatch) {                               // a spectated friendly doesn't touch your record
+      const hs = game.home.score, as = game.away.score;
+      if (hs > as) game.record.w++; else if (hs < as) game.record.l++; else game.record.d++;
+      saveStore();
+    }
     navigateTo('result');
   }
 
@@ -1673,9 +1775,11 @@
     if (c.champion) html += `<div class="cup-col"><div class="cup-col-title">CUP</div><div class="cup-champion"><div class="trophy">🏆</div><span class="champ-code" style="color:${teamById(c.champion).col}">${teamById(c.champion).code}</span></div></div>`;
     host.innerHTML = html;
     if (status != null) $('cup-status').textContent = status;
-    const cp = $('cup-play');
-    if (c.champion || !c.alive) cp.classList.add('hidden');
+    const cp = $('cup-play'), cw = $('cup-watch');
+    const done = c.champion || !c.alive;
+    if (done) cp.classList.add('hidden');
     else { cp.classList.remove('hidden'); cp.textContent = `Play Your Match · ${teamById(c.you).code} v ${teamById(cupOpponent()).code}`; }
+    if (cw) cw.classList.toggle('hidden', done);
   }
 
   // ----- penalty shootout -----
@@ -1914,7 +2018,7 @@
     });
     $('league-table').innerHTML = html;
     if (status != null) $('league-status').textContent = status;
-    const cp = $('league-play');
+    const cp = $('league-play'), lw = $('league-watch');
     if (lg.done) cp.classList.add('hidden');
     else {
       const f = leagueFixtureForYou();
@@ -1922,6 +2026,7 @@
       cp.classList.remove('hidden');
       cp.textContent = opp ? `Play Match · ${teamById(lg.you).code} v ${teamById(opp).code}` : 'Play Match';
     }
+    if (lw) lw.classList.toggle('hidden', lg.done);
   }
 
   // ============================================================
@@ -2150,9 +2255,10 @@
     ['table','scorers','history'].forEach(t => { const el = document.querySelector(`[data-action="career-tab-${t}"]`); if (el) el.classList.toggle('on', t === tab); });
     $('career-content').innerHTML = tab === 'table' ? careerTableHTML() : tab === 'scorers' ? careerScorersHTML() : careerHistoryHTML();
     if (status != null) $('career-status').textContent = status;
-    const cp = $('career-play');
+    const cp = $('career-play'), cw = $('career-watch');
     if (c.cur.done) { cp.textContent = `Start Season ${c.season + 1}`; }
     else { const f = careerFixtureForYou(); const opp = f ? (f.pair[0] === c.team ? f.pair[1] : f.pair[0]) : null; cp.textContent = opp ? `Play Match · ${teamById(c.team).code} v ${teamById(opp).code}` : 'Play Match'; }
+    if (cw) cw.classList.toggle('hidden', c.cur.done);   // can only watch when there's a match to play
   }
 
   // ============================================================
@@ -2624,6 +2730,10 @@
     const tot = game.poss.home + game.poss.away || 1;
     $('possession-fill').style.width = (game.poss.home / tot * 100).toFixed(0) + '%';
     const pip = $('dash-pip'); if (pip) pip.classList.toggle('cooling', performance.now() < game.dashCdUntil);
+    // spectator: show a WATCHING badge, hide the player controls
+    const badge = $('watch-badge'); if (badge) badge.classList.toggle('hidden', !game.watching);
+    const arow = $('action-chip'); if (arow) arow.style.visibility = game.watching ? 'hidden' : '';
+    if (pip) pip.style.visibility = game.watching ? 'hidden' : '';
     setActionChip();
   }
   function setActionChip() {
@@ -2738,6 +2848,7 @@
       penFast: (v) => { game._penFast = !!v; },
       penKick: (dir) => { penInput(dir || 'ArrowUp'); penInput('Enter'); },
       saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
+      watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
       render,
     };
   }

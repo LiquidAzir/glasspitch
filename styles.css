@@ -225,6 +225,12 @@ html, body {
 .ts-random { background: var(--surface-2); color: var(--ink); border: 1.5px solid var(--line); }
 .ts-random:focus { transform: scale(1.03); }
 .ts-hint { text-align: center; color: var(--ink-3); font-size: 12px; padding: 8px 0 4px; }
+.ts-diff {
+  align-self: center; margin: 2px 0 6px; padding: 8px 20px; border-radius: 999px;
+  background: var(--surface-2); border: 1.5px solid var(--line); color: var(--ink);
+  font-size: 15px; font-weight: 800; letter-spacing: 0.5px; cursor: pointer;
+}
+.ts-diff:focus { transform: scale(1.04); border-color: var(--cyn); box-shadow: var(--shadow-glow); }
 
 /* ============================================================
    MATCH — canvas + HUD overlay
@@ -302,6 +308,17 @@ html, body {
 }
 .match-toast.show { opacity: 1; }
 
+/* spectator badge */
+.watch-badge {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(8,16,12,0.86); border: 1.5px solid var(--cyn); border-radius: 999px;
+  padding: 6px 16px; font-size: 13px; font-weight: 800; letter-spacing: 1px; color: var(--ink);
+  box-shadow: 0 0 16px rgba(88,214,255,0.4);
+}
+.watch-badge .wb-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cyn); box-shadow: 0 0 8px var(--cyn); animation: wbpulse 1.4s ease-in-out infinite; }
+@keyframes wbpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
 /* guided tutorial prompt */
 .tutorial-prompt {
   position: absolute; top: 84px; left: 50%; transform: translateX(-50%);
@@ -370,6 +387,17 @@ html, body {
 .overlay-sub { font-size: 18px; color: var(--ink-2); font-weight: 700; }
 .result-score { font-size: 34px; color: var(--ink); font-weight: 900; }
 .overlay-menu { display: flex; flex-direction: column; gap: 11px; width: 300px; margin-top: 8px; }
+
+/* in-match coach / tactics panel + compact pause layout so it all fits 600px */
+#pause .overlay-frame { padding: 22px 24px; gap: 10px; }
+#pause .overlay-menu { gap: 9px; margin-top: 2px; }
+.tactics-panel {
+  width: 320px; background: var(--surface); border: 1.5px solid var(--line);
+  border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.tactics-head { font-size: 12px; font-weight: 800; letter-spacing: 1px; color: var(--cyn); text-transform: uppercase; }
+.tactics-panel .opt-row { height: 46px; }
+.tactics-panel .opt-value { color: var(--cyn); }
 
 .stat-grid {
   width: 100%; display: flex; flex-direction: column; gap: 7px;

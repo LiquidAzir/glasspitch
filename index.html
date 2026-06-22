@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
   <div id="app">
@@ -33,6 +33,7 @@
           <button class="title-btn focusable" data-action="quick-match">Kick Off</button>
           <button class="title-btn focusable" data-action="goto-career">Career</button>
           <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
+          <button class="title-btn focusable" data-action="goto-watch">Watch Match</button>
           <button class="title-btn focusable" data-action="choose-teams">Choose Teams</button>
           <button class="title-btn focusable" data-action="goto-how">How to Play</button>
           <button class="title-btn focusable" data-action="goto-settings">Settings</button>
@@ -66,6 +67,8 @@
       </div>
 
       <div class="ts-dots" id="ts-dots"></div>
+
+      <button class="ts-diff focusable" data-action="ts-cycle-difficulty" id="ts-diff">Difficulty · Normal</button>
 
       <nav class="ts-actions">
         <button class="ts-confirm focusable" data-action="team-confirm" id="ts-confirm">Select</button>
@@ -117,6 +120,9 @@
           </div>
         </div>
 
+        <!-- spectator badge -->
+        <div class="watch-badge hidden" id="watch-badge"><span class="wb-dot"></span>WATCHING · pinch to take control</div>
+
         <!-- transient toast (Corner, Throw-in, etc.) -->
         <div class="match-toast" id="match-toast"></div>
 
@@ -143,8 +149,18 @@
       <div class="overlay-frame">
         <h1 class="overlay-title">Paused</h1>
         <p class="overlay-sub" id="pause-score">—</p>
+        <div class="tactics-panel">
+          <div class="tactics-head">Tactics — you're the coach</div>
+          <button class="opt-row focusable" data-action="pause-cycle-formation">
+            <span class="opt-label">Formation</span><span class="opt-value" id="pause-formation">4-3-3</span>
+          </button>
+          <button class="opt-row focusable" data-action="pause-cycle-mentality">
+            <span class="opt-label">Mentality</span><span class="opt-value" id="pause-mentality">Balanced</span>
+          </button>
+        </div>
         <nav class="overlay-menu">
           <button class="title-btn focusable" data-action="resume">Resume</button>
+          <button class="title-btn focusable" data-action="watch-toggle">👁 Watch (AI plays)</button>
           <button class="title-btn focusable" data-action="restart-match">Restart Match</button>
           <button class="title-btn focusable" data-action="toggle-sound" id="sound-toggle-btn">Sound: ON</button>
           <button class="title-btn focusable" data-action="menu-touch-toggle" id="touch-toggle-btn">Touch Controls: OFF</button>
@@ -201,6 +217,7 @@
       <p class="cup-status" id="career-status"></p>
       <nav class="cup-actions">
         <button class="ts-confirm focusable" data-action="career-play" id="career-play">Play Match</button>
+        <button class="title-btn focusable" data-action="career-watch" id="career-watch">👁 Watch</button>
         <button class="title-btn focusable" data-action="career-new" id="career-new">New Career</button>
       </nav>
     </div>
@@ -246,6 +263,7 @@
       </div>
       <nav class="cup-actions">
         <button class="ts-confirm focusable" data-action="league-play" id="league-play">Play Match</button>
+        <button class="title-btn focusable" data-action="league-watch" id="league-watch">👁 Watch</button>
         <button class="title-btn focusable" data-action="league-new" id="league-new">New Season</button>
       </nav>
     </div>
@@ -265,6 +283,7 @@
       </div>
       <nav class="cup-actions">
         <button class="ts-confirm focusable" data-action="cup-play" id="cup-play">Play Your Match</button>
+        <button class="title-btn focusable" data-action="cup-watch" id="cup-watch">👁 Watch</button>
         <button class="title-btn focusable" data-action="cup-new" id="cup-new">New Cup</button>
       </nav>
     </div>
@@ -354,6 +373,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

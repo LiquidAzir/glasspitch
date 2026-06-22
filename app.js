@@ -278,6 +278,7 @@
     else if (id === 'career') renderCareer();
     else if (id === 'shootout') { drawPen(); penInstr(); }
     else if (id === 'setpiece') { drawSetPiece(); spInstr(); }
+    else if (id === 'lineups') renderLineups();
     else if (id === 'match') {
       game.guardUntil = performance.now() + 220;
       // clear transient FX so re-showing the match screen doesn't replay the last
@@ -363,7 +364,7 @@
       game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
       game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
       game.steer = { x: 0, y: 0 }; game.lastSteerT = -10; game.keys = {}; game.tapped = {};
-      game.tutorial = null; game.dashCdUntil = 0;
+      game.tutorial = null; game.dashCdUntil = 0; game.ticker = null;
       setupPitchGeom(); drawStaticPitch(); paintScoreboard();
       _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
       game.history = [snap.matchMode === 'cup' ? 'cup' : snap.matchMode === 'league' ? 'league' : snap.matchMode === 'career' ? 'career' : 'title'];
@@ -545,6 +546,10 @@
     game.away.kitCol = away;
   }
   function teamRenderCol(side) { const tm = teamObj(side); return (tm && tm.kitCol) || teamObj(side).def.col; }
+  // player names — deterministic per team (so a club always fields the same XI), cached
+  const _rosterCache = {};
+  function roster(teamId) { return _rosterCache[teamId] || (_rosterCache[teamId] = genRoster(teamId)); }
+  function playerName(teamId, num) { return roster(teamId)[num] || ('#' + num); }
 
   // ============================================================
   // MATCH SETUP
@@ -557,15 +562,17 @@
       side, x: 0, y: 0, vx: 0, vy: 0, heading: side === 'home' ? -Math.PI/2 : Math.PI/2,
       speedR: 0.85 + t.r.PAC/100 * 0.32,
       tackleCd: 0, kickCd: 0, dashT: 0, runPhase: srand()*6.28, aiT: srand()*0.3,
-      stam: 1, cards: 0, ...over,
+      stam: 1, cards: 0,
+      mGoals: 0, mTk: 0, mSv: 0, mSh: 0,           // per-match stats (for Man of the Match)
+      ...over,
     });
     const players = form.map((f, i) => mk({
-      id: side + i, role: f.role, num: f.num, idx: i,
+      id: side + i, role: f.role, num: f.num, idx: i, name: playerName(teamId, f.num),
       nx: f.nx, ny: f.ny, isGK: f.role === 'GK', captain: i === captainIdx,
     }));
     const bench = [];
     for (let j = 0; j < BENCH_SIZE; j++) bench.push(mk({
-      id: side + 'b' + j, role: BENCH_ROLES[j] || 'MID', num: 12 + j, idx: -1,
+      id: side + 'b' + j, role: BENCH_ROLES[j] || 'MID', num: 12 + j, idx: -1, name: playerName(teamId, 12 + j),
       nx: 0.5, ny: 0.5, isGK: false, captain: false, onBench: true,
     }));
     return { teamId, side, def: t, score: 0, players, form, formKey, mentality: 'Balanced', bench, subsLeft: SUBS_MAX };
@@ -683,10 +690,14 @@
     drawStaticPitch();
     paintScoreboard();
     resetPositions(game.kickoffTeam, true);
+    game.motm = null; game.ticker = null;
     saveStore();
-    navigateTo('match', { addToHistory: false });
     game.history = ['title'];
     saveMatch();                                   // make the fresh match resumable straight away
+    navigateTo('lineups', { addToHistory: false });   // team-sheet intro, then pinch to kick off
+  }
+  function kickoffGo() {
+    navigateTo('match', { addToHistory: false });
     SFX.whistle(); say(`Kick off — ${game.home.def.name} v ${game.away.def.name}.`);
   }
 
@@ -905,6 +916,7 @@
       case 'toggle-sound': toggleSound(); break;
       case 'menu-touch-toggle': showTouch(!game.settings.touch); break;
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
+      case 'kickoff-go': kickoffGo(); break;
       case 'resume': resumeMatch(); break;
       case 'coach-side-toggle': game._coachSide = (game._coachSide === 'away') ? 'home' : 'away'; renderPauseTactics(); break;
       case 'pause-cycle-formation': {
@@ -1040,6 +1052,7 @@
     const owner = playerById(game.ball.owner);
     const pside = owner ? owner.side : game.lastTouch;
     game.poss[pside] += dt;
+    if (game.ticker) tickTicker();        // reveal other matches' goals as they "happen"
 
     chooseActive(dt);
     // alternate which side updates first each frame so neither gets a systematic
@@ -1461,7 +1474,8 @@
     // aim toward a post based on steer (player skill); AI aims away from keeper
     let aim = aimX;
     if (side === 'away' || aim === 0) {
-      const gk = teamObj(otherSide(side)).players[0];
+      const opp = teamObj(otherSide(side)).players;
+      const gk = opp.find(q => q.isGK) || opp[0];
       aim = clamp((CFG.PW/2 - gk.x) / CFG.goalHalfW, -1, 1) * 0.7 + rrange(-0.25, 0.25);
     }
     const tx = clamp(CFG.PW/2 + aim * (CFG.goalHalfW - 0.4), CFG.PW/2 - CFG.goalHalfW + 0.3, CFG.PW/2 + CFG.goalHalfW - 0.3);
@@ -1469,7 +1483,7 @@
     const skill = (acc && acc.shot) || 0.9;
     const err = (1 - skill) * 6 + clamp(goalDist/30,0,1) * 1.4;
     const ex = tx + rrange(-err, err), ey = ty + rrange(-1, 1);
-    if (Math.abs(ex - CFG.PW/2) < CFG.goalHalfW) game.stats.sot[side]++;   // on-frame = on target
+    if (Math.abs(ex - CFG.PW/2) < CFG.goalHalfW) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; }   // on-frame = on target
     kickRaw(p, ex, ey, CFG.ballMax * (0.78 + (teamObj(side).def.r.ATT/100)*0.22), true);
   }
   function goalAimedOnTarget(tx) { return Math.abs(tx - CFG.PW/2) < CFG.goalHalfW; }
@@ -1507,6 +1521,7 @@
       const prob = game.tutorial ? 1 : clamp(base * (p.side === 'home' ? 1 : diff.tackle), 0.15, 0.9);
       if (srand() < prob) {
         b.owner = p.id; b.z = 0; b.vz = 0; b.shot = false; b.trail.length = 0;
+        p.mTk = (p.mTk || 0) + 1;
         _prevBall.x = b.x; _prevBall.y = b.y;
         game.lastTouch = p.side; game.lastKicker = null; game.lastTouchPlayer = p.id; game._lastWasShot = false;
         spawnEffect('win', p.x, p.y);
@@ -1551,6 +1566,7 @@
   }
   function knockLoose(carrier, presser) {
     const b = game.ball;
+    presser.mTk = (presser.mTk || 0) + 1;          // Man of the Match: ball won
     const dx = presser.x - carrier.x, dy = presser.y - carrier.y, n = len(dx, dy) || 1;
     b.owner = null; b.shot = false; b.z = 0; b.vz = 0; b.trail.length = 0;
     const sp = rrange(3.5, 6.5);
@@ -1619,8 +1635,9 @@
   // GOALKEEPERS
   // ============================================================
   function updateKeepers(dt) {
-    keeperLogic(game.home.players[0], 'home', dt);
-    keeperLogic(game.away.players[0], 'away', dt);
+    const hg = game.home.players.find(p => p.isGK), ag = game.away.players.find(p => p.isGK);
+    if (hg) keeperLogic(hg, 'home', dt);
+    if (ag) keeperLogic(ag, 'away', dt);
   }
   function keeperLogic(gk, side, dt) {
     const b = game.ball;
@@ -1649,6 +1666,7 @@
         _prevBall.x = b.x; _prevBall.y = b.y;
         game.lastTouch = side; game.lastTouchPlayer = gk.id; game._lastWasShot = false; gk.kickCd = 0;
         if (wasShot) {
+          gk.mSv = (gk.mSv || 0) + 1;
           SFX.save(); spawnEffect('win', gk.x, gk.y);
           say(side === 'home'
             ? pick(['Great save by your keeper!', 'Tipped away!', 'Brilliant stop!', 'Saved! Keeps you in it.'])
@@ -1749,6 +1767,7 @@
     game.netRipple[otherSide(side)] = 1.0; // the conceding net ripples
     const scorer = playerById(game.lastTouchPlayer);
     const ownGoal = scorer && scorer.side !== side;
+    if (scorer && !ownGoal) scorer.mGoals = (scorer.mGoals || 0) + 1;   // Man of the Match
     if (game.matchMode === 'career' && game.career && scorer && !ownGoal) {
       const tid = side === 'home' ? game.home.teamId : game.away.teamId;
       const key = tid + '#' + scorer.num;
@@ -1769,7 +1788,7 @@
     let state;
     if (hs === as) state = `level at ${hs}–${as}`;
     else { const ld = hs > as ? game.home.def : game.away.def; state = `${ld.name} lead ${Math.max(hs,as)}–${Math.min(hs,as)}`; }
-    const who = scorer ? `#${scorer.num} ${teamObj(scorer.side).def.code}` : '';
+    const who = scorer ? `${scorer.name || ('#' + scorer.num)} (${teamObj(scorer.side).def.code})` : '';
     // late drama
     const min = Math.floor(game.clockSec / 60);
     const late = min >= 80;
@@ -1818,12 +1837,35 @@
   // ============================================================
   // HALF / FULL TIME
   // ============================================================
+  // Man of the Match — weight goals heaviest, then saves/tackles/shots; nudge toward the winners
+  function computeMOTM() {
+    if (!game.home || !game.away) return null;
+    const hs = game.home.score, as = game.away.score;
+    const winSide = hs > as ? 'home' : as > hs ? 'away' : null;
+    const all = game.home.players.concat(game.home.bench || [], game.away.players, game.away.bench || []);
+    let best = null, bestScore = 0;
+    for (const p of all) {
+      let s = (p.mGoals || 0) * 3 + (p.mSv || 0) * 1.2 + (p.mTk || 0) * 0.4 + (p.mSh || 0) * 0.5;
+      if (winSide && p.side === winSide) s += 0.6;
+      if (s > bestScore) { bestScore = s; best = p; }
+    }
+    if (!best) return null;
+    let note;
+    if (best.mGoals >= 2) note = best.mGoals + ' goals';
+    else if (best.mGoals === 1) note = '1 goal' + (best.mTk >= 2 ? `, ${best.mTk} won` : '');
+    else if (best.isGK && best.mSv >= 2) note = best.mSv + ' saves';
+    else if (best.mTk >= 3) note = best.mTk + ' tackles';
+    else note = 'all-round display';
+    return { name: best.name || ('#' + best.num), code: teamObj(best.side).def.code, note };
+  }
+  function motmLine() { return game.motm ? `★ MOTM: ${game.motm.name} (${game.motm.code})` : ''; }
   function goHalftime() { game.phase = 'play'; SFX.whistle(); navigateTo('halftime'); }
   function goFulltime() {
     game.phase = 'ended';
     clearMatch();                                  // match over — no longer resumable
     const wasWatch = game.matchMode === 'watch';
     game.watching = false; game._allAI = false;    // leave spectator mode at the whistle
+    game.motm = computeMOTM();
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
@@ -2304,16 +2346,18 @@
     const opp = f.pair[0] === lg.you ? f.pair[1] : f.pair[0];
     startMatch(lg.you, opp, 'league');
     game.history = ['league'];
+    startRoundTicker(lg.fixtures[lg.round], f.idx);
   }
   function onLeagueMatchEnd() {
     const lg = game.league, f = leagueFixtureForYou();
     const youScore = game.home.score, oppScore = game.away.score;
     lg.results[lg.round][f.idx] = f.pair[0] === lg.you ? [youScore, oppScore] : [oppScore, youScore];
-    const rd = lg.fixtures[lg.round];
+    const rd = lg.fixtures[lg.round], fin = game.ticker && game.ticker.finals;
     for (let i = 0; i < rd.length; i++) {
       if (i === f.idx || lg.results[lg.round][i]) continue;
-      lg.results[lg.round][i] = simMatch(rd[i][0], rd[i][1]).score;
+      lg.results[lg.round][i] = (fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;   // use the scores the ticker showed
     }
+    game.ticker = null;
     let msg;
     if (lg.round >= lg.fixtures.length - 1) {
       lg.done = true; lg.champion = leagueTable()[0].id;
@@ -2325,7 +2369,7 @@
     }
     saveStore();
     navigateTo('league', { addToHistory: false }); game.history = ['title'];
-    renderLeague(msg);
+    renderLeague(msg + (game.motm ? '  ' + motmLine() : ''));
   }
   function computeTable(lg) {
     const row = {};
@@ -2460,7 +2504,7 @@
     const sur = SURNAMES.slice();
     for (let i = sur.length-1; i > 0; i--) { const j = Math.floor(rnd()*(i+1)); const t = sur[i]; sur[i] = sur[j]; sur[j] = t; }
     const roster = {};
-    for (let num = 1; num <= 11; num++) roster[num] = FIRST_INITIALS[Math.floor(rnd()*FIRST_INITIALS.length)] + '. ' + sur[num % sur.length];
+    for (let num = 1; num <= 16; num++) roster[num] = FIRST_INITIALS[Math.floor(rnd()*FIRST_INITIALS.length)] + '. ' + sur[num % sur.length];
     return roster;
   }
   function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); }
@@ -2498,6 +2542,7 @@
     const opp = f.pair[0] === c.team ? f.pair[1] : f.pair[0];
     startMatch(c.team, opp, 'career');
     game.history = ['career'];
+    startRoundTicker(c.cur.fixtures[c.cur.round], f.idx);
   }
   function careerAdvance() {
     const c = game.career; if (!c) return;
@@ -2525,18 +2570,19 @@
     const c = game.career, cur = c.cur, f = careerFixtureForYou();
     const ys = game.home.score, os = game.away.score;
     cur.results[cur.round][f.idx] = f.pair[0] === c.team ? [ys, os] : [os, ys];
-    const rd = cur.fixtures[cur.round];
+    const rd = cur.fixtures[cur.round], fin = game.ticker && game.ticker.finals;
     for (let i = 0; i < rd.length; i++) {
       if (i === f.idx || cur.results[cur.round][i]) continue;
-      const r = simMatch(rd[i][0], rd[i][1]);
-      cur.results[cur.round][i] = r.score;
-      distributeGoals(rd[i][0], r.score[0]); distributeGoals(rd[i][1], r.score[1]);
+      const sc = (fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;   // use the scores the ticker showed
+      cur.results[cur.round][i] = sc;
+      distributeGoals(rd[i][0], sc[0]); distributeGoals(rd[i][1], sc[1]);
     }
+    game.ticker = null;
     if (cur.round >= cur.fixtures.length - 1) { onCareerSeasonEnd(); return; }
     cur.round++; saveStore();
     const w = ys > os, d = ys === os;
     navigateTo('career', { addToHistory: false }); game.history = ['title'];
-    renderCareer((w ? 'Win! ' : d ? 'Draw. ' : 'Lost. ') + `Matchday ${cur.round + 1}.`);
+    renderCareer((w ? 'Win! ' : d ? 'Draw. ' : 'Lost. ') + `Matchday ${cur.round + 1}.` + (game.motm ? '  ' + motmLine() : ''));
   }
   function onCareerSeasonEnd() {
     const c = game.career, table = computeTable(c.cur);
@@ -2877,13 +2923,12 @@
     // team-colour ground ring — instant which-side-is-this read for every player
     // (the active player / ball-carrier instead get the brighter possession ring below)
     if (!(isActive || hasBall)) {
-      ctx.save();
-      ctx.fillStyle = hexA(kit, 0.20);
+      // no shadowBlur here — this draws for ~20 players every frame and blur is the
+      // single most expensive canvas op on the glasses; the solid ring reads fine without it
+      ctx.fillStyle = hexA(kit, 0.22);
       ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*1.2, bodyR*0.56, 0, 0, 6.2832); ctx.fill();
       ctx.strokeStyle = kit; ctx.lineWidth = Math.max(1.8, bodyR*0.2);
-      ctx.shadowColor = hexA(kit, 0.65); ctx.shadowBlur = 4;
       ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.6, bodyR*1.2, bodyR*0.56, 0, 0, 6.2832); ctx.stroke();
-      ctx.restore();
     }
 
     // possession / active ring — the carrier gets a filled glow disc (stronger), so it's
@@ -3107,6 +3152,37 @@
     const el = $('match-toast'); el.textContent = text; el.classList.add('show');
     clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 1600);
   }
+  // ----- live "other scores" ticker (league / career) -----
+  let tickerT = 0;
+  function startRoundTicker(fixtures, youIdx) {
+    game.ticker = null;
+    if (!fixtures) return;
+    const events = [], finals = {};
+    fixtures.forEach((pair, i) => {
+      if (i === youIdx) return;
+      const sc = simMatch(pair[0], pair[1]).score;     // pre-roll the final so the table & ticker agree
+      finals[i] = sc;
+      for (let g = 0; g < sc[0]; g++) events.push({ t: rrange(4, 88), i, side: 0, a: pair[0], b: pair[1] });
+      for (let g = 0; g < sc[1]; g++) events.push({ t: rrange(4, 88), i, side: 1, a: pair[0], b: pair[1] });
+    });
+    events.sort((x, y) => x.t - y.t);
+    const run = {};
+    events.forEach(e => { run[e.i] = run[e.i] || [0, 0]; run[e.i][e.side]++; e.ra = run[e.i][0]; e.rb = run[e.i][1]; });
+    game.ticker = { events, finals, shown: 0 };
+  }
+  function tickTicker() {
+    const tk = game.ticker; if (!tk) return;
+    const min = game.clockSec / 60;
+    while (tk.shown < tk.events.length && tk.events[tk.shown].t <= min) {
+      const e = tk.events[tk.shown]; tk.shown++;
+      showTickerLine(`${Math.round(e.t)}'  ${teamById(e.a).code} ${e.ra}–${e.rb} ${teamById(e.b).code}`);
+    }
+  }
+  function showTickerLine(text) {
+    const el = $('match-ticker'); if (!el) return;
+    el.textContent = '⚽ ' + text; el.classList.add('show');
+    clearTimeout(tickerT); tickerT = setTimeout(() => el.classList.remove('show'), 3400);
+  }
   let sayT = 0;
   function say(line) {
     const el = $('commentary'); if (!el) return;
@@ -3132,10 +3208,25 @@
       </div><div class="stat-name">${name}</div>`;
     }).join('');
   }
+  function renderLineups() {
+    const sheet = (team, side) => {
+      const t = team.def, col = teamRenderCol(side);
+      const head = `<div class="lu-crest" style="background:${col};color:${pickInk(col)}">${t.glyph}</div><div class="lu-tname">${t.name}</div>`;
+      const rows = team.players.map(p =>
+        `<div class="lu-row"><span class="lu-num" style="color:${col}">${p.num}</span><span class="lu-pname">${p.name || ('#' + p.num)}</span><span class="lu-pos">${p.role}</span></div>`
+      ).join('');
+      return `<div class="lu-col">${head}<div class="lu-list">${rows}</div></div>`;
+    };
+    $('lu-home').innerHTML = sheet(game.home, 'home');
+    $('lu-away').innerHTML = sheet(game.away, 'away');
+    const meta = $('lu-meta');
+    if (meta) meta.textContent = game.matchMode === 'cup' ? 'Cup' : game.matchMode === 'league' ? 'League' : game.matchMode === 'career' ? 'Career' : game.watching ? 'Exhibition · Watching' : 'Exhibition';
+  }
   function renderResult() {
     const hs = game.home.score, as = game.away.score;
     $('result-title').textContent = hs === as ? 'Full Time' : (hs > as ? `${game.home.def.name} win!` : `${game.away.def.name} win!`);
     $('result-score').textContent = scoreLine();
+    const mo = $('result-motm'); if (mo) mo.textContent = game.motm ? `★ Man of the Match — ${game.motm.name} (${game.motm.code}) · ${game.motm.note}` : '';
     renderStatGrid($('result-stats'));
   }
 

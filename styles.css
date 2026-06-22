@@ -243,9 +243,9 @@ html, body {
 .scoreboard {
   position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 11px;
-  background: rgba(8, 16, 12, 0.82);
+  background: rgba(8, 16, 12, 0.9);
   border: 1px solid var(--line); border-radius: 12px;
-  padding: 4px 12px; backdrop-filter: blur(2px);
+  padding: 4px 12px;   /* no backdrop-filter: re-blurring the live canvas every frame is costly on the glasses GPU */
   box-shadow: 0 4px 18px rgba(0,0,0,0.5);
 }
 .sb-team { display: flex; align-items: center; gap: 7px; }
@@ -286,6 +286,10 @@ html, body {
    scoreboard so the camera can drop lower and zoom into the field. */
 #match.cam-behind .action-row { bottom: auto; top: 56px; }
 #match.cam-behind .dash-pip { bottom: auto; top: 54px; }
+/* push the transient pills clear of the lifted chip so they don't stack into a blob */
+#match.cam-behind .match-ticker { top: 96px; }
+#match.cam-behind .match-toast { top: 100px; }
+#match.cam-behind .tutorial-prompt { top: 106px; }
 .action-chip {
   display: flex; align-items: center; gap: 9px;
   background: rgba(8, 16, 12, 0.85);
@@ -408,9 +412,9 @@ html, body {
 }
 .dash-pip.cooling { background: transparent; color: var(--ink-3); border-color: var(--line); box-shadow: none; filter: grayscale(1); opacity: 0.5; }
 
-/* goal impact punch on the pitch */
-#pitch { transform-origin: 50% 42%; }
-#pitch.punch { animation: pitchPunch 0.55s cubic-bezier(0.2,0.8,0.3,1); }
+/* goal impact punch on the pitch (both the 2D and 3D canvases) */
+#pitch, #pitch3d { transform-origin: 50% 42%; }
+#pitch.punch, #pitch3d.punch { animation: pitchPunch 0.55s cubic-bezier(0.2,0.8,0.3,1); }
 @keyframes pitchPunch {
   0% { transform: scale(1); }
   22% { transform: scale(1.05); }

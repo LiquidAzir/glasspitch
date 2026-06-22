@@ -285,6 +285,8 @@
       // goal banner / pitch punch (CSS keyframe animations restart on display)
       const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
       const pc = $('pitch'); if (pc) pc.classList.remove('punch');
+      const p3 = $('pitch3d'); if (p3) p3.classList.remove('punch');
+      game.keys = {}; game.tapped = {}; game.steer = { x: 0, y: 0 }; game.lastSteerT = -10;   // drop any stuck swipe on (re)entering the match (pause/resume, halftime)
       updateHudLayout(); render(); updateHud(true);
     }
   }
@@ -333,6 +335,7 @@
       activeId: game.activeId, activeLockT: game.activeLockT || 0,
       lastTouch: game.lastTouch, lastKicker: game.lastKicker, lastTouchPlayer: game.lastTouchPlayer,
       concede: game._concede || null, lastWasShot: !!game._lastWasShot,
+      watching: !!game.watching, allAI: !!game._allAI,
       poss: { home: game.poss.home, away: game.poss.away },
       stats: { shots: { ...game.stats.shots }, sot: { ...game.stats.sot }, fouls: { ...game.stats.fouls } },
     };
@@ -358,6 +361,8 @@
       game.phase = (snap.phase === 'goal' || snap.phase === 'restart') ? 'play' : (snap.phase || 'play');
       game.phaseT = 0;
       game.matchMode = snap.matchMode || 'friendly'; game.kickoffTeam = snap.kickoffTeam || 'away';
+      if (snap.watching || snap.allAI || snap.matchMode === 'watch') enterWatch();   // resume a saved spectator match as a spectator
+      else { game.watching = false; game._allAI = false; }
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
       game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
       game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot;
@@ -524,10 +529,12 @@
   // ============================================================
   // COLOR HELPERS
   // ============================================================
-  function hexToRgb(h) { h = h.replace('#',''); if (h.length===3) h = h.split('').map(c=>c+c).join(''); const n = parseInt(h,16); return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 }; }
+  // memoized — colours are drawn from a tiny fixed palette but these run per-player per-frame
+  const _rgbCache = {}, _shadeCache = {};
+  function hexToRgb(h) { let v = _rgbCache[h]; if (v) return v; let s = h.replace('#',''); if (s.length===3) s = s.split('').map(c=>c+c).join(''); const n = parseInt(s,16); return (_rgbCache[h] = { r:(n>>16)&255, g:(n>>8)&255, b:n&255 }); }
   function lum(h) { const c = hexToRgb(h); return (0.299*c.r + 0.587*c.g + 0.114*c.b) / 255; }
   function pickInk(h) { return lum(h) > 0.6 ? '#0b1410' : '#ffffff'; }
-  function shade(h, amt) { const c = hexToRgb(h); const f = (v) => clamp(Math.round(v + 255*amt), 0, 255); return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`; }
+  function shade(h, amt) { const k = h + '|' + amt; let v = _shadeCache[k]; if (v) return v; const c = hexToRgb(h); const f = (x) => clamp(Math.round(x + 255*amt), 0, 255); return (_shadeCache[k] = `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`); }
   function hexA(h, a) { const c = hexToRgb(h); return `rgba(${c.r},${c.g},${c.b},${a})`; }
   // perceptual-ish colour distance (0..~765) for detecting kit clashes
   function colorDist(a, b) {
@@ -548,7 +555,7 @@
     }
     game.away.kitCol = away;
   }
-  function teamRenderCol(side) { const tm = teamObj(side); return (tm && tm.kitCol) || teamObj(side).def.col; }
+  function teamRenderCol(side) { const tm = teamObj(side); return (tm && (tm.kitCol || (tm.def && tm.def.col))) || '#ffffff'; }   // null-safe: 3D may build before a match exists
   // player names — deterministic per team (so a club always fields the same XI), cached
   const _rosterCache = {};
   function roster(teamId) { return _rosterCache[teamId] || (_rosterCache[teamId] = genRoster(teamId)); }
@@ -585,7 +592,7 @@
   function setTeamFormation(team, formKey) {
     const form = FORMATIONS[formKey]; if (!form || !team) return;
     team.formKey = formKey; team.form = form;
-    team.players.forEach((pl, i) => { const f = form[i]; if (!f) return; pl.role = f.role; pl.nx = f.nx; pl.ny = f.ny; });
+    team.players.forEach(pl => { const f = form[pl.idx]; if (!f) return; pl.role = f.role; pl.nx = f.nx; pl.ny = f.ny; });   // index by stored idx (AI reads form[p.idx]); robust after a red card
   }
   // ----- substitutions / cards / injuries -----
   function doSub(team, outId, inId) {
@@ -646,8 +653,8 @@
   function injurePlayer(p) {
     const team = teamObj(p.side);
     if (p.injured) return; p.injured = true;
-    if (team.subsLeft > 0) { say(`${team.def.code} #${p.num} hurt — forced change.`); autoSubPlayer(team, p); }
-    else { p.stam = Math.min(p.stam, 0.4); say(`${team.def.code} #${p.num} is hurt but plays on — no subs left.`); }
+    if (!p.isGK && team.subsLeft > 0 && autoSubPlayer(team, p)) { say(`${team.def.code} #${p.num} hurt — forced change.`); }
+    else { p.stam = Math.min(p.stam, 0.4); say(`${team.def.code} #${p.num} is hurt but plays on.`); }   // GK / empty bench → nerf instead of a silently-failed sub
   }
   function commitFoul(fouler, victim, x, y) {
     if (!fouler || !victim) return;
@@ -713,10 +720,16 @@
   function goalY(side) { return atkUp(side) ? 0 : CFG.PL; }       // the goal this side shoots at
   function ownGoalY(side) { return atkUp(side) ? CFG.PL : 0; }    // the goal this side defends
   function allPlayers() { return game.home.players.concat(game.away.players); }
-  function playerById(id) { return id == null ? null : allPlayers().find(p => p.id === id); }
+  // O(1)-ish, allocation-free (ids are unique across both rosters) — called many times per frame
+  function playerById(id) {
+    if (id == null || !game.home || !game.away) return null;
+    return game.home.players.find(p => p.id === id) || game.away.players.find(p => p.id === id);
+  }
 
   // place everyone at formation home (kickoff / goal / half restart)
   function resetPositions(kickoffTeam, fullKickoff) {
+    // clear stale input so a swipe held before the goal/half doesn't drive the kickoff carrier
+    game.steer.x = 0; game.steer.y = 0; game.lastSteerT = -10; game.keys = {}; game.tapped = {};
     [game.home, game.away].forEach(team => {
       team.players.forEach((p) => {
         const slot = team.form[p.idx] || { nx: p.nx, ny: p.ny };   // robust if the side is a man down
@@ -798,8 +811,8 @@
     if (e.repeat && DIRV[key]) return;           // kill EMG ghost-repeat
 
     // penalty shootout has its own input model
-    if (game.screen === 'shootout') { if (DIRV[key] || key === 'Enter') { penInput(key); e.preventDefault(); } return; }
-    if (game.screen === 'setpiece') { if (DIRV[key] || key === 'Enter') { spInput(key); e.preventDefault(); } return; }
+    if (game.screen === 'shootout') { if (DIRV[key] || key === 'Enter') { if (performance.now() >= game.guardUntil) penInput(key); e.preventDefault(); } return; }
+    if (game.screen === 'setpiece') { if (DIRV[key] || key === 'Enter') { if (performance.now() >= game.guardUntil) spInput(key); e.preventDefault(); } return; }
 
     const inMatch = game.screen === 'match' && game.phase !== 'ended';
 
@@ -865,6 +878,7 @@
     }
   }
   function tryDash(ch) {
+    if (game._allAI || game.watching) return;            // no phantom dash on AI players while spectating
     const now = performance.now();
     if (now < game.dashCdUntil) return;
     const p = playerById(game.activeId); if (!p || p.side !== 'home') return;
@@ -1071,8 +1085,10 @@
     const order = (game._updTick = (game._updTick || 0) + 1) % 2
       ? game.home.players.concat(game.away.players)
       : game.away.players.concat(game.home.players);
+    computePressRanks();                          // O(n log n) once per side per frame instead of O(n^2) in aiMove
     for (const p of order) updatePlayer(p, dt);
     tickDispossess(dt);
+    if (game.screen !== 'match') return;   // a foul/turnover may have triggered a set-piece mid-tick — bail before more physics
     updateBall(dt);
     updateKeepers(dt);
     resolveCollisions();
@@ -1258,7 +1274,7 @@
     // rotated 90° vs the top-down sim. Map swipes to the SCREEN (measured projection):
     //   up → far touchline (sim x+ / screen-up), down → toward camera (sim x- / "closer to me"),
     //   left → left goal (sim y-), right → right goal (sim y+).  (x,y) -> (-y, x).
-    if (game.settings.gfx === '3D' && game.settings.cam === 'Side') { const t = x; x = -y; y = t; }
+    if (game.settings.gfx === '3D' && game.settings.cam === 'Side' && R3D && R3D.ready) { const t = x; x = -y; y = t; }   // only when the side view is actually on screen (matches render()'s 3D guard)
     const n = len(x, y) || 1;
     game.steer.x = x / n; game.steer.y = y / n;
     game.lastSteerT = performance.now() / 1000;
@@ -1331,12 +1347,21 @@
   // tiny stable hash so a given FWD consistently makes runs (not jitter)
   function srandHash(idx, b) { return ((idx * 37 + Math.floor(b.x)) % 5) < 3; }
 
-  // rank of p among its team by distance to ball (0 = closest outfielder)
+  // rank each outfielder by distance to the ball (0 = closest) — computed once per side per frame
+  function computePressRanks() {
+    const bx = game.ball.x, by = game.ball.y;
+    const buf = game._pressBuf || (game._pressBuf = []);
+    for (const team of [game.home, game.away]) {
+      buf.length = 0;
+      for (const q of team.players) { if (q.isGK) continue; q._bd2 = dist2(q.x, q.y, bx, by); buf.push(q); }
+      buf.sort((a, c) => a._bd2 - c._bd2);
+      for (let i = 0; i < buf.length; i++) buf[i]._pressRank = i;
+    }
+  }
   function teamPressRank(p) {
-    const mates = teamObj(p.side).players.filter(q => !q.isGK);
-    const d = dist2(p.x, p.y, game.ball.x, game.ball.y);
-    let rank = 0;
-    for (const q of mates) { if (q === p) continue; if (dist2(q.x, q.y, game.ball.x, game.ball.y) < d) rank++; }
+    if (p._pressRank != null) return p._pressRank;
+    const d = dist2(p.x, p.y, game.ball.x, game.ball.y); let rank = 0;   // fallback (e.g. just-subbed mid-frame)
+    for (const q of teamObj(p.side).players) { if (q.isGK || q === p) continue; if (dist2(q.x, q.y, game.ball.x, game.ball.y) < d) rank++; }
     return rank;
   }
 
@@ -1462,6 +1487,18 @@
     let ax = game.steer.x, ay = game.steer.y;
     if (!ax && !ay) { ax = Math.cos(p.heading); ay = Math.sin(p.heading); }
     return directionalPassTarget(p, ax, ay);
+  }
+  // cheaper variant for the aim PREVIEW (drawn every frame): recompute the target choice
+  // ~12x/s, but track the chosen mate's live position each frame. (doPass still uses the fresh one.)
+  let _aimT = { t: -1e9, owner: null, mate: null };
+  function previewPassTarget(p) {
+    const now = performance.now();
+    const m = _aimT.mate;
+    const stale = m && (m.onBench || m.isGK || m.side !== p.side);
+    if (stale || _aimT.owner !== p.id || now - _aimT.t > 85) {
+      _aimT.mate = homePassTarget(p); _aimT.t = now; _aimT.owner = p.id;
+    }
+    return _aimT.mate;
   }
   function doPass(p) {
     const mate = homePassTarget(p) || pickForwardMate(p);
@@ -1815,7 +1852,7 @@
     if (late && !ownGoal) prefix = pick(['LATE GOAL! ', 'DRAMA! ']);
     say(prefix + (who ? who + ' — ' : '') + state + '.');
   }
-  function pitchPunch() { const el = $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }
+  function pitchPunch() { const el = (game.settings.gfx === '3D' && R3D && R3D.ready) ? $('pitch3d') : $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }
 
   function restartAt(toSide, x, y, label, pushBack) {
     const b = game.ball;
@@ -2028,6 +2065,7 @@
   function startShootout(youId, oppId) {
     game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [] };
     navigateTo('shootout', { addToHistory: false });
+    game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't auto-advance the aim
     SFX.whistle();
     drawPen(); penInstr();
   }
@@ -2185,6 +2223,7 @@
     const taker = game.home.players.filter(p => !p.isGK).slice().sort((u, v) => (v.stam || 1) - (u.stam || 1))[0] || game.home.players[0];
     game.sp = { type, taker: taker.id, phase: 'aim', aim: (type === 'fk' ? 2 : 1), power: 0, powerDir: 1, result: null, lr: (type === 'corner' ? a : 'L') };
     navigateTo('setpiece', { addToHistory: false });
+    game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't skip the aim phase
     SFX.whistle();
     drawSetPiece(); spInstr();
   }
@@ -2670,10 +2709,10 @@
   // ============================================================
   function spawnEffect(type, x, y) { game.effects.push({ type, x, y, t: 0, life: type === 'tackle' ? 0.4 : 0.6 }); }
   function spawnGoalBurst(side) {
-    const gx = CFG.PW/2, gy = side === 'home' ? 0 : CFG.PL;
+    const gx = CFG.PW/2, gy = goalY(side);               // the goal this side attacks (flips at half time)
     for (let i = 0; i < 36; i++) {
       const a = srand() * 6.28, s = rrange(6, 22);
-      game.effects.push({ type: 'spark', x: gx + rrange(-3,3), y: gy + (side==='home'?1:-1)*rrange(0,2),
+      game.effects.push({ type: 'spark', x: gx + rrange(-3,3), y: gy + (gy === 0 ? 1 : -1)*rrange(0,2),
         vx: Math.cos(a)*s, vy: Math.sin(a)*s - 6, t: 0, life: rrange(0.7, 1.6), col: teamRenderCol(side) });
     }
     game.effects.push({ type: 'flash', x: gx, y: gy, t: 0, life: 0.5 });
@@ -2691,7 +2730,7 @@
   // RENDER
   // ============================================================
   let cv, ctx, pitchCv, pitchCtx, geom;
-  let cv3d = null, R3D = null, _threeLoading = false, gfxWatch = { n: 0, acc: 0 };
+  let cv3d = null, R3D = null, _threeLoading = false, _webglOK = null;
   function setupRender() {
     cv = $('pitch'); ctx = cv.getContext('2d');
     pitchCv = document.createElement('canvas'); pitchCv.width = 600; pitchCv.height = 600;
@@ -2888,8 +2927,13 @@
     if (R3D && R3D.ready) { showPitch3D(true); return; }
     if (_threeLoading) return;
     if (!cv3d) cv3d = $('pitch3d');
-    const probe = document.createElement('canvas');
-    if (!(probe.getContext('webgl2') || probe.getContext('webgl'))) { failTo2D('3D needs WebGL — using 2D'); return; }
+    if (_webglOK == null) {   // probe once, and release the probe context so we don't leak it on retries
+      const probe = document.createElement('canvas');
+      const gl = probe.getContext('webgl2') || probe.getContext('webgl');
+      if (gl) { const lc = gl.getExtension('WEBGL_lose_context'); if (lc) lc.loseContext(); }
+      _webglOK = !!gl;
+    }
+    if (!_webglOK) { failTo2D('3D needs WebGL — using 2D'); return; }
     if (window.__THREE) { tryBuild3D(); return; }
     _threeLoading = true;
     let settled = false;
@@ -2947,7 +2991,7 @@
     const renderer = new T.WebGLRenderer({ canvas: cv3d, alpha: true, antialias: true, premultipliedAlpha: false, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false });
     renderer.setPixelRatio(1); renderer.setSize(600, 600, false); renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = T.SRGBColorSpace;
-    cv3d.addEventListener('webglcontextlost', (e) => { e.preventDefault(); failTo2D('3D context lost — using 2D'); }, false);
+    cv3d.addEventListener('webglcontextlost', (e) => { e.preventDefault(); try { renderer.dispose(); } catch (_) {} R3D = null; failTo2D('3D context lost — using 2D'); }, false);   // invalidate so a later re-enable rebuilds cleanly
     const scene = new T.Scene();
     const camera = new T.PerspectiveCamera(49, 1, 0.5, 520);   // fixed broadcast cam; pose set from the selected CAM_PRESET via applyCam() below
     scene.add(new T.HemisphereLight(0x9bc2ff, 0x0a2014, 1.0));
@@ -3008,7 +3052,7 @@
     refresh3DKits();
   }
   function refresh3DKits() {
-    if (!R3D) return; const T = R3D.T;
+    if (!R3D || !game.home || !game.away) return;   // teams may not exist yet (3D can build before a match)
     R3D.sides.home.bodyMat.color.set(teamRenderCol('home')); R3D.sides.home.bodyMat.emissive.set(teamRenderCol('home'));
     R3D.sides.away.bodyMat.color.set(teamRenderCol('away')); R3D.sides.away.bodyMat.emissive.set(teamRenderCol('away'));
   }
@@ -3058,7 +3102,7 @@
         setAimLine3D(ap.x, ap.y, tx, gy, '#58d6ff');
         r.aimMarker.position.set(tx - 44, 0.07, gy - 52.5); r.aimMarker.material.color.set('#58d6ff'); show = true;
       } else {
-        const m = homePassTarget(ap);
+        const m = previewPassTarget(ap);
         if (m) { setAimLine3D(ap.x, ap.y, m.x, m.y, '#3ef08f'); r.aimMarker.position.set(m.x - 44, 0.07, m.y - 52.5); r.aimMarker.material.color.set('#3ef08f'); show = true; }
       }
     }
@@ -3092,9 +3136,9 @@
   function drawNetRipples() {
     const draw = (side) => {
       const r = game.netRipple[side]; if (r <= 0) return;
-      const top = side === 'away'; // away net is at top (y=0)
+      const gy = ownGoalY(side); const top = gy === 0;   // the goal the conceding side defends (flips at half time)
       const gx0 = CFG.PW/2 - CFG.goalHalfW, gx1 = CFG.PW/2 + CFG.goalHalfW;
-      const gy = top ? 0 : CFG.PL, back = gy + (top ? -1 : 1) * CFG.goalDepth;
+      const back = gy + (top ? -1 : 1) * CFG.goalDepth;
       ctx.save();
       ctx.strokeStyle = hexA(teamRenderCol(otherSide(side)), 0.5 * r + 0.2);
       ctx.lineWidth = 1.4;
@@ -3127,7 +3171,7 @@
         ctx.beginPath(); ctx.arc(wx(tx), wy(goalY(p.side)), 7, 0, 6.2832); ctx.stroke();
         ctx.restore();
       } else {
-        const m = homePassTarget(p);          // preview matches the facing-aware pass
+        const m = previewPassTarget(p);       // preview matches the facing-aware pass (throttled)
         if (m) {
           ctx.save();
           ctx.strokeStyle = 'rgba(62,240,143,0.6)'; ctx.lineWidth = 1.6; ctx.setLineDash([4,5]);
@@ -3147,8 +3191,12 @@
   }
 
   function drawPlayers() {
-    // sort by y so lower players draw on top (depth)
-    const list = allPlayers().slice().sort((a,b) => a.y - b.y);
+    // sort by y so lower players draw on top (depth) — reuse a scratch list (no per-frame concat/slice)
+    const list = game._drawList || (game._drawList = []);
+    list.length = 0;
+    for (const p of game.home.players) list.push(p);
+    for (const p of game.away.players) list.push(p);
+    list.sort((a, b) => a.y - b.y);
     for (const p of list) drawPlayer(p);
   }
   function drawPlayer(p) {

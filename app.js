@@ -275,7 +275,14 @@
     else if (id === 'league') renderLeague();
     else if (id === 'career') renderCareer();
     else if (id === 'shootout') { drawPen(); penInstr(); }
-    else if (id === 'match') { game.guardUntil = performance.now() + 220; render(); updateHud(true); }
+    else if (id === 'match') {
+      game.guardUntil = performance.now() + 220;
+      // clear transient FX so re-showing the match screen doesn't replay the last
+      // goal banner / pitch punch (CSS keyframe animations restart on display)
+      const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
+      const pc = $('pitch'); if (pc) pc.classList.remove('punch');
+      render(); updateHud(true);
+    }
   }
 
   // ============================================================
@@ -397,8 +404,16 @@
   }
   // in-match coach panel (shown on the pause screen)
   function renderPauseTactics() {
-    const f = $('pause-formation'); if (f) f.textContent = (game.home && game.home.formKey) || game.settings.formation;
-    const m = $('pause-mentality'); if (m) m.textContent = (game.home && game.home.mentality) || game.settings.mentality || 'Balanced';
+    const watching = !!game.watching;
+    if (!watching) game._coachSide = 'home';                 // you only coach your own side in a normal match
+    const side = game._coachSide || 'home';
+    const team = teamObj(side);
+    const head = $('tactics-head'); if (head) head.textContent = watching ? 'Coach both teams' : "Tactics — you're the coach";
+    const trow = $('coach-team-row'); if (trow) trow.classList.toggle('hidden', !watching);   // team picker only when spectating
+    const tv = $('coach-team'); if (tv && team) tv.textContent = `${team.def.code} · ${side === 'home' ? 'Home' : 'Away'}`;
+    const srow = $('pause-subs-row'); if (srow) srow.classList.toggle('hidden', watching);     // manual subs are home-only; auto handles both while watching
+    const f = $('pause-formation'); if (f) f.textContent = (team && team.formKey) || game.settings.formation;
+    const m = $('pause-mentality'); if (m) m.textContent = (team && team.mentality) || 'Balanced';
   }
   // ----- substitutions screen -----
   function fitBar(p) {
@@ -886,19 +901,23 @@
       case 'menu-touch-toggle': showTouch(!game.settings.touch); break;
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
       case 'resume': resumeMatch(); break;
+      case 'coach-side-toggle': game._coachSide = (game._coachSide === 'away') ? 'home' : 'away'; renderPauseTactics(); break;
       case 'pause-cycle-formation': {
-        if (!game.home) break;
-        const i = FORMATION_KEYS.indexOf(game.home.formKey);
+        const team = teamObj(game._coachSide || 'home'); if (!team) break;
+        const i = FORMATION_KEYS.indexOf(team.formKey);
         const next = FORMATION_KEYS[(i + 1) % FORMATION_KEYS.length];
-        setTeamFormation(game.home, next);
-        game.settings.formation = next; saveStore(); saveMatch(); renderPauseTactics();
+        setTeamFormation(team, next);
+        if (team.side === 'home' && !game.watching) { game.settings.formation = next; saveStore(); }   // only your own pick is remembered
+        saveMatch(); renderPauseTactics();
         break;
       }
       case 'pause-cycle-mentality': {
-        if (!game.home) break;
-        const i = MENTALITY_KEYS.indexOf(game.home.mentality || 'Balanced');
+        const team = teamObj(game._coachSide || 'home'); if (!team) break;
+        const i = MENTALITY_KEYS.indexOf(team.mentality || 'Balanced');
         const next = MENTALITY_KEYS[(i + 1) % MENTALITY_KEYS.length];
-        game.home.mentality = next; game.settings.mentality = next; saveStore(); saveMatch(); renderPauseTactics();
+        team.mentality = next;
+        if (team.side === 'home' && !game.watching) { game.settings.mentality = next; saveStore(); }
+        saveMatch(); renderPauseTactics();
         break;
       }
       case 'goto-subs': game._subOff = null; navigateTo('subs'); break;

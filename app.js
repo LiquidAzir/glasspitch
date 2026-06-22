@@ -193,7 +193,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '2D', sound: true, touch: false },
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -351,6 +351,7 @@
       game.home = rebuild(snap.home);
       game.away = rebuild(snap.away);
       assignKitColors();
+      if (R3D && R3D.ready) refresh3DKits();
       game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [], ...snap.ball };
       if (!Array.isArray(game.ball.trail)) game.ball.trail = [];
       game.clockSec = snap.clockSec || 0; game.half = snap.half || 1;
@@ -402,6 +403,7 @@
     $('opt-formation').textContent = game.settings.formation;
     const oa = $('opt-autosub'); if (oa) oa.textContent = game.settings.autoSub ? 'ON' : 'OFF';
     const os = $('opt-setpieces'); if (os) os.textContent = game.settings.setPieces ? 'ON' : 'OFF';
+    const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -680,6 +682,7 @@
     game.away = makeTeam(awayId, 'away', '4-3-3');
     game.home.mentality = game.settings.mentality || 'Balanced';   // your coaching choice carries in
     assignKitColors();                              // away gets a change strip if the colours clash
+    if (R3D && R3D.ready) refresh3DKits();          // recolour 3D models for the new teams
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
     game.clockSec = 0; game.half = 1; game.phase = 'play';
     game.poss = { home: 1, away: 1 };
@@ -942,6 +945,7 @@
       case 'subs-auto': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSubs(); break;
       case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
       case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
+      case 'toggle-gfx': toggleGfx(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -2671,10 +2675,13 @@
   // RENDER
   // ============================================================
   let cv, ctx, pitchCv, pitchCtx, geom;
+  let cv3d = null, R3D = null, _threeLoading = false, gfxWatch = { n: 0, acc: 0 };
   function setupRender() {
     cv = $('pitch'); ctx = cv.getContext('2d');
     pitchCv = document.createElement('canvas'); pitchCv.width = 600; pitchCv.height = 600;
     pitchCtx = pitchCv.getContext('2d');
+    cv3d = $('pitch3d');
+    if (game.settings.gfx === '3D') ensure3D();   // lazy-build now if the toggle was left on
   }
   function setupPitchGeom() {
     const W = 600, H = 600;
@@ -2799,6 +2806,10 @@
   }
 
   function render() {
+    // 3D path (only when toggled on AND fully loaded); any failure reverts to the untouched 2D body below
+    if (game.settings.gfx === '3D' && R3D && R3D.ready) {
+      try { render3D(); measureGfx(); return; } catch (e) { failTo2D('3D error — back to 2D'); }
+    }
     if (!ctx || !geom) return;
     ctx.clearRect(0, 0, 600, 600);
     ctx.drawImage(pitchCv, 0, 0);
@@ -2808,6 +2819,188 @@
     drawBall();
     drawFx();
     drawBallMarker();
+  }
+
+  // ============================================================
+  // 3D RENDERER (optional, behind the Graphics toggle). three.js is
+  // vendored locally (three.module.js) and lazy-loaded. The 2D path above
+  // is the hard fallback: any failure flips back to 2D, never blank.
+  // ============================================================
+  const THREE_URL = './three.module.js?v=22';
+  function toggleGfx() {
+    game.settings.gfx = game.settings.gfx === '3D' ? '2D' : '3D';
+    saveStore(); renderSettings();
+    if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false);
+  }
+  function showPitch3D(on) {
+    if (cv3d) cv3d.classList.toggle('hidden', !on);
+    if (cv) cv.classList.toggle('hidden', !!on && R3D && R3D.ready);   // hide 2D canvas only once 3D is live
+  }
+  function failTo2D(msg) {
+    game.settings.gfx = '2D';
+    try { saveStore(); renderSettings(); } catch (e) {}
+    showPitch3D(false);
+    if (cv) cv.classList.remove('hidden');
+    if (msg) { showToast(msg); say(msg); }
+  }
+  function ensure3D() {
+    if (R3D && R3D.ready) { showPitch3D(true); return; }
+    if (_threeLoading) return;
+    if (!cv3d) cv3d = $('pitch3d');
+    const probe = document.createElement('canvas');
+    if (!(probe.getContext('webgl2') || probe.getContext('webgl'))) { failTo2D('3D needs WebGL — using 2D'); return; }
+    if (window.__THREE) { tryBuild3D(); return; }
+    _threeLoading = true;
+    let settled = false;
+    window.__onThree = () => { if (settled) return; settled = true; _threeLoading = false; tryBuild3D(); };
+    window.__onThreeFail = () => { if (settled) return; settled = true; _threeLoading = false; failTo2D('3D unavailable — using 2D'); };
+    const s = document.createElement('script'); s.type = 'module';
+    s.textContent = `import(${JSON.stringify(THREE_URL)}).then(m=>{window.__THREE=m;(window.__onThree||function(){})();}).catch(e=>{(window.__onThreeFail||function(){})(e);});`;
+    document.head.appendChild(s);
+    setTimeout(() => { if (!window.__THREE) (window.__onThreeFail || function () {})(); }, 9000);
+  }
+  function tryBuild3D() { try { build3D(window.__THREE); showPitch3D(true); } catch (e) { console.warn('3D build failed', e); failTo2D('3D failed — using 2D'); } }
+
+  function buildPitchTexture() {
+    const S = 8, W = Math.round(CFG.PW * S), H = Math.round(CFG.PL * S);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    const tx = (m) => m * S, ty = (m) => m * S;
+    const stripes = 12, sh = H / stripes;
+    for (let i = 0; i < stripes; i++) { x.fillStyle = (i % 2 === 0) ? '#0f3623' : '#0b2917'; x.fillRect(0, i * sh, W, sh + 1); }
+    x.strokeStyle = 'rgba(234,255,243,0.95)'; x.lineWidth = Math.max(2, S * 0.4); x.lineJoin = 'round';
+    const RECT = (mx, my, mw, mh) => x.strokeRect(tx(mx), ty(my), mw * S, mh * S);
+    const DOT = (mx, my, r) => { x.fillStyle = 'rgba(234,255,243,0.95)'; x.beginPath(); x.arc(tx(mx), ty(my), r, 0, 6.2832); x.fill(); };
+    RECT(0.6, 0.6, CFG.PW - 1.2, CFG.PL - 1.2);
+    x.beginPath(); x.moveTo(tx(0.6), ty(CFG.PL / 2)); x.lineTo(tx(CFG.PW - 0.6), ty(CFG.PL / 2)); x.stroke();
+    x.beginPath(); x.arc(tx(CFG.PW / 2), ty(CFG.PL / 2), CFG.centerR * S, 0, 6.2832); x.stroke();
+    DOT(CFG.PW / 2, CFG.PL / 2, S * 0.5);
+    const box = (top) => {
+      const bx = (CFG.PW - CFG.boxW) / 2, sx = (CFG.PW - CFG.sixW) / 2;
+      const by = top ? 0.6 : CFG.PL - CFG.boxD - 0.6, sy = top ? 0.6 : CFG.PL - CFG.sixD - 0.6;
+      RECT(bx, by, CFG.boxW, CFG.boxD); RECT(sx, sy, CFG.sixW, CFG.sixD);
+      const py = top ? CFG.penSpot : CFG.PL - CFG.penSpot; DOT(CFG.PW / 2, py, S * 0.45);
+      x.beginPath(); const a0 = top ? 0.32 : Math.PI + 0.32, a1 = top ? Math.PI - 0.32 : 6.2832 - 0.32;
+      x.arc(tx(CFG.PW / 2), ty(py), CFG.centerR * S, a0, a1); x.stroke();
+    };
+    box(true); box(false);
+    const cr = 1.0 * S, carc = (cx, cy, a0, a1) => { x.beginPath(); x.arc(tx(cx), ty(cy), cr, a0, a1); x.stroke(); };
+    carc(0.6, 0.6, 0, Math.PI / 2); carc(CFG.PW - 0.6, 0.6, Math.PI / 2, Math.PI);
+    carc(CFG.PW - 0.6, CFG.PL - 0.6, Math.PI, Math.PI * 1.5); carc(0.6, CFG.PL - 0.6, Math.PI * 1.5, 6.2832);
+    return c;
+  }
+  function radialTex(T, hex) {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const x = c.getContext('2d'); const g = x.createRadialGradient(32, 32, 2, 32, 32, 32);
+    g.addColorStop(0, hexA(hex, 0.9)); g.addColorStop(0.5, hexA(hex, 0.35)); g.addColorStop(1, hexA(hex, 0));
+    x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+    return new T.CanvasTexture(c);
+  }
+  function netTex(T) {
+    const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+    x.strokeStyle = 'rgba(220,240,255,0.9)'; x.lineWidth = 1.5;
+    for (let i = 0; i <= 8; i++) { const p = i / 8 * 64; x.beginPath(); x.moveTo(p, 0); x.lineTo(p, 64); x.moveTo(0, p); x.lineTo(64, p); x.stroke(); }
+    const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(3, 2); return t;
+  }
+  function build3D(T) {
+    const renderer = new T.WebGLRenderer({ canvas: cv3d, alpha: true, antialias: true, premultipliedAlpha: false, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false });
+    renderer.setPixelRatio(1); renderer.setSize(600, 600, false); renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = T.SRGBColorSpace;
+    cv3d.addEventListener('webglcontextlost', (e) => { e.preventDefault(); failTo2D('3D context lost — using 2D'); }, false);
+    const scene = new T.Scene();
+    const camera = new T.PerspectiveCamera(39, 1, 0.5, 400);   // fixed broadcast cam behind the near goal (tuned to fit the whole pitch)
+    camera.position.set(0, 104, 140); camera.lookAt(0, 0, -6);
+    scene.add(new T.HemisphereLight(0x9bc2ff, 0x0a2014, 1.0));
+    const dl = new T.DirectionalLight(0xffffff, 0.55); dl.position.set(8, 80, 50); scene.add(dl);
+    // pitch ground (reuse the 2D art language via a full-bleed texture)
+    const tex = new T.CanvasTexture(buildPitchTexture());
+    tex.colorSpace = T.SRGBColorSpace; tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const ground = new T.Mesh(new T.PlaneGeometry(CFG.PW, CFG.PL), new T.MeshBasicMaterial({ map: tex, transparent: true }));
+    ground.rotation.x = -Math.PI / 2; scene.add(ground);
+    // goals + nets
+    const goalMat = new T.MeshBasicMaterial({ color: 0xeafff3 });
+    const nMat = new T.MeshBasicMaterial({ map: netTex(T), transparent: true, opacity: 0.22, side: T.DoubleSide, depthWrite: false });
+    const buildGoal = (zEnd, dir) => {
+      const hw = CFG.goalHalfW, h = CFG.crossbarH, pw = 0.16, d = CFG.goalDepth * dir;
+      const g = new T.Group();
+      [-hw, hw].forEach(px => { const m = new T.Mesh(new T.BoxGeometry(pw, h, pw), goalMat); m.position.set(px, h / 2, zEnd); g.add(m); });
+      const bar = new T.Mesh(new T.BoxGeometry(hw * 2 + pw, pw, pw), goalMat); bar.position.set(0, h, zEnd); g.add(bar);
+      [-hw, hw].forEach(px => { const m = new T.Mesh(new T.BoxGeometry(pw, pw, CFG.goalDepth), goalMat); m.position.set(px, h, zEnd + d / 2); g.add(m); });
+      const back = new T.Mesh(new T.PlaneGeometry(hw * 2, h), nMat); back.position.set(0, h / 2, zEnd + d); g.add(back);
+      scene.add(g);
+    };
+    buildGoal(-CFG.PL / 2, -1); buildGoal(CFG.PL / 2, 1);
+    // shared geometries
+    const bodyGeo = new T.CapsuleGeometry(0.48, 1.15, 5, 10); bodyGeo.translate(0, 1.05, 0);
+    const headGeo = new T.SphereGeometry(0.34, 12, 10); headGeo.translate(0, 2.0, 0);
+    const blobGeo = new T.CircleGeometry(0.72, 16); blobGeo.rotateX(-Math.PI / 2);
+    const headMat = new T.MeshLambertMaterial({ color: 0xf0c79e, emissive: 0x3a2a1e });
+    const blobMat = new T.MeshBasicMaterial({ color: 0x223028, transparent: true, opacity: 0.5, depthWrite: false });
+    const N = 11;
+    const sides = {};
+    ['home', 'away'].forEach(side => {
+      const bodyMat = new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0.7 });
+      const body = new T.InstancedMesh(bodyGeo, bodyMat, N);
+      const head = new T.InstancedMesh(headGeo, headMat, N);
+      const blob = new T.InstancedMesh(blobGeo, blobMat, N);
+      [body, head, blob].forEach(m => { m.frustumCulled = false; m.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(m); });
+      sides[side] = { body, head, blob, bodyMat };
+    });
+    // ball + halo + shadow
+    const ball = new T.Mesh(new T.SphereGeometry(0.34, 16, 12), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 0.6, roughness: 0.5, metalness: 0 }));
+    scene.add(ball);
+    const halo = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, BALL_GLOW), transparent: true, blending: T.AdditiveBlending, depthWrite: false }));
+    scene.add(halo);
+    const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
+    ballShadow.scale.setScalar(0.6); scene.add(ballShadow);
+    // indicator rings + chevron
+    const ringGeo = new T.RingGeometry(0.62, 0.92, 28); ringGeo.rotateX(-Math.PI / 2);
+    const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9, depthWrite: false })); scene.add(activeRing);
+    const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
+    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.4, 1.4, 1); scene.add(chevron);
+    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, sides, dummy: new T.Object3D(), ready: true };
+    refresh3DKits();
+  }
+  function refresh3DKits() {
+    if (!R3D) return; const T = R3D.T;
+    R3D.sides.home.bodyMat.color.set(teamRenderCol('home')); R3D.sides.home.bodyMat.emissive.set(teamRenderCol('home'));
+    R3D.sides.away.bodyMat.color.set(teamRenderCol('away')); R3D.sides.away.bodyMat.emissive.set(teamRenderCol('away'));
+  }
+  function syncSide3D(side) {
+    const r = R3D, d = r.dummy, S = r.sides[side], players = teamObj(side).players;
+    for (let i = 0; i < 11; i++) {
+      const p = players[i];
+      if (!p) { d.position.set(0, -200, 0); d.scale.setScalar(0.0001); d.rotation.set(0, 0, 0); d.updateMatrix(); S.body.setMatrixAt(i, d.matrix); S.head.setMatrixAt(i, d.matrix); S.blob.setMatrixAt(i, d.matrix); continue; }
+      const sc = p.isGK ? 1.12 : 1;
+      const bob = (len(p.vx, p.vy) > 0.5) ? Math.sin(p.runPhase) * 0.06 : 0;
+      d.position.set(p.x - 44, bob, p.y - 52.5); d.rotation.set(0, -p.heading + Math.PI / 2, 0); d.scale.setScalar(sc); d.updateMatrix();
+      S.body.setMatrixAt(i, d.matrix); S.head.setMatrixAt(i, d.matrix);
+      d.position.set(p.x - 44, 0.02, p.y - 52.5); d.rotation.set(0, 0, 0); d.scale.setScalar(sc * (p.isGK ? 1.05 : 1)); d.updateMatrix(); S.blob.setMatrixAt(i, d.matrix);
+    }
+    S.body.instanceMatrix.needsUpdate = true; S.head.instanceMatrix.needsUpdate = true; S.blob.instanceMatrix.needsUpdate = true;
+  }
+  function render3D() {
+    const r = R3D, b = game.ball;
+    syncSide3D('home'); syncSide3D('away');
+    const bz = 0.34 + (b.z || 0);
+    r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
+    r.halo.position.set(b.x - 44, bz, b.y - 52.5); const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 170); r.halo.scale.setScalar(2.2 + pulse * 0.7);
+    r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
+    // indicators (mirror the 2D colour language)
+    const aId = (!game._allAI) ? game.activeId : null;
+    const ap = aId ? playerById(aId) : null;
+    if (ap && ap.side === 'home' && !ap.isGK) { r.activeRing.visible = true; r.activeRing.position.set(ap.x - 44, 0.05, ap.y - 52.5); r.chevron.visible = true; r.chevron.position.set(ap.x - 44, 2.5, ap.y - 52.5); }
+    else { r.activeRing.visible = false; r.chevron.visible = false; }
+    const owner = playerById(b.owner);
+    if (owner && !owner.isGK) { r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5); const cc = (aId === owner.id) ? '#58d6ff' : (owner.side === 'home' ? '#3ef08f' : '#ff7a45'); r.carrierRing.material.color.set(cc); }
+    else r.carrierRing.visible = false;
+    r.renderer.render(r.scene, r.camera);
+  }
+  function measureGfx() {
+    // rolling render-time watchdog: if 3D is sustainably too slow, fall back to 2D
+    const t = performance.now(); const w = gfxWatch;
+    if (w.last != null) { const d = t - w.last; if (d < 200) { w.acc += d; w.n++; if (w.n >= 90) { const avg = w.acc / w.n; w.acc = 0; w.n = 0; if (avg > 28 && game.settings.gfx === '3D') failTo2D('3D too slow — using 2D'); } } else { w.acc = 0; w.n = 0; } }
+    w.last = t;
   }
 
   // a floating marker that hovers over whoever has the ball — drawn last so it's
@@ -3283,6 +3476,7 @@
       saveMatch, clearMatch, hasSaved: hasSavedMatch, resume: () => { const s = loadMatchSnap(); return s ? restoreMatch(s) : false; },
       watch: () => enterWatch(), unwatch: () => exitWatch(false), watchMatch: (a, b) => startWatchMatch(a || TEAMS[0].id, b),
       sub: (out, inn) => doSub(game.home, out, inn), autoSubTick: () => autoSubTick(),
+      gfx: (v) => { game.settings.gfx = v || '3D'; if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
       setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
       spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },

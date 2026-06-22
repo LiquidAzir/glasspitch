@@ -237,7 +237,8 @@ html, body {
    ============================================================ */
 #match { padding: 0; }
 #pitch { position: absolute; inset: 0; width: 600px; height: 600px; }
-.hud { position: absolute; inset: 0; pointer-events: none; }
+#pitch3d { position: absolute; inset: 0; width: 600px; height: 600px; z-index: 1; }
+.hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 
 .scoreboard {
   position: absolute; top: 6px; left: 50%; transform: translateX(-50%);

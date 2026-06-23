@@ -893,6 +893,46 @@
       if (el) handleAction(el.dataset.action, el);
     });
     setupTouchControls();
+    setupAdaptiveControls();
+    fitToScreen();
+    window.addEventListener('resize', fitToScreen);
+    window.addEventListener('orientationchange', fitToScreen);
+    window.addEventListener('load', fitToScreen);                          // catch late layout (mobile address bar)
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', fitToScreen);
+  }
+  // scale the fixed 600x600 app to fit PC / phone screens; glasses (600x600) snap to 1:1 (untouched)
+  function fitToScreen() {
+    const app = $('app'); if (!app) return;
+    let s = Math.min(window.innerWidth / 600, window.innerHeight / 600);
+    if (s > 0.93 && s < 1.07) s = 1;                 // ~square viewport (glasses) → exact 1:1
+    app.style.transform = 'scale(' + (s || 1) + ')';
+  }
+  // Touch (phone): drag on the pitch to steer, tap to act. Mouse (PC): click the pitch to act.
+  // All routed through the key path so the view-rotation + ↑↓↑↓ menu + dash combos still apply.
+  function setupAdaptiveControls() {
+    const app = $('app') || document.body;
+    const isControl = (t) => t && t.closest && t.closest('button, .opt-row, #touch-controls, [data-action], a, input');
+    const gameplay = () => game.screen === 'match' || game.screen === 'shootout' || game.screen === 'setpiece';
+    const dirOf = (dx, dy) => { if (Math.hypot(dx, dy) < 16) return null; return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'ArrowRight' : 'ArrowLeft') : (dy > 0 ? 'ArrowDown' : 'ArrowUp'); };
+    const tap = () => { onKeyDown({ key: 'Enter', repeat: false, preventDefault() {} }); onKeyUp({ key: 'Enter' }); };
+    let start = null, held = null, moved = false;
+    const release = () => { if (held) { onKeyUp({ key: held }); held = null; } };
+    app.addEventListener('touchstart', (e) => {
+      if (!gameplay() || isControl(e.target)) { start = null; return; }
+      const t = e.touches[0]; start = { x: t.clientX, y: t.clientY, time: performance.now() }; moved = false; e.preventDefault();
+    }, { passive: false });
+    app.addEventListener('touchmove', (e) => {
+      if (!start) return;
+      const t = e.touches[0]; const dir = dirOf(t.clientX - start.x, t.clientY - start.y);
+      if (dir) { moved = true; if (dir !== held) { release(); held = dir; onKeyDown({ key: dir, repeat: false, preventDefault() {} }); } }
+      e.preventDefault();
+    }, { passive: false });
+    app.addEventListener('touchend', (e) => {
+      if (!start) return; const s = start; start = null; release();
+      if (!moved && performance.now() - s.time < 400) tap();          // quick tap → action
+    }, { passive: false });
+    app.addEventListener('touchcancel', () => { start = null; release(); }, { passive: false });
+    app.addEventListener('mousedown', (e) => { if (gameplay() && !isControl(e.target)) tap(); });   // PC: click pitch = action
   }
   function setupTouchControls() {
     const root = $('touch-controls'); if (!root) return;
@@ -917,8 +957,10 @@
   }
 
   const DIRV = { ArrowUp:{x:0,y:-1}, ArrowDown:{x:0,y:1}, ArrowLeft:{x:-1,y:0}, ArrowRight:{x:1,y:0} };
+  // PC aliases: WASD steer, Space = pinch/action
+  const KEY_ALIAS = { w:'ArrowUp', a:'ArrowLeft', s:'ArrowDown', d:'ArrowRight', W:'ArrowUp', A:'ArrowLeft', S:'ArrowDown', D:'ArrowRight', ' ':'Enter', Spacebar:'Enter' };
   function onKeyDown(e) {
-    const key = e.key;
+    const key = KEY_ALIAS[e.key] || e.key;
     SFX.resume();
     if (e.repeat && DIRV[key]) return;           // kill EMG ghost-repeat
 
@@ -970,7 +1012,7 @@
         e.preventDefault(); break;
     }
   }
-  function onKeyUp(e) { if (DIRV[e.key]) game.keys[e.key] = false; }
+  function onKeyUp(e) { const k = KEY_ALIAS[e.key] || e.key; if (DIRV[k]) game.keys[k] = false; }
 
   function recordCombo(key) {
     const now = performance.now();

@@ -895,6 +895,7 @@
     });
     setupTouchControls();
     setupAdaptiveControls();
+    setupGamepad();
     fitToScreen();
     window.addEventListener('resize', fitToScreen);
     window.addEventListener('orientationchange', fitToScreen);
@@ -959,6 +960,48 @@
       if (performance.now() - lastTouch < 700) return;     // ignore the synthetic mouse event a touch fires
       if (gameplay() && !isControl(e.target)) act();
     });
+  }
+  // Bluetooth / USB gamepad support (Gamepad API) for PC + mobile browsers.
+  // Left stick / D-pad = steer (routed through game.keys so the side-view rotation applies),
+  // A = pass/shoot/tackle/switch, RB/RT = dash, Start = pause; full menu navigation too.
+  let _padKeys = {}, _padPrev = {}, _padRAF = 0;
+  function setupGamepad() {
+    if (!navigator.getGamepads) return;
+    const kick = () => { if (!_padRAF) _padRAF = requestAnimationFrame(gamepadLoop); };
+    window.addEventListener('gamepadconnected', kick);
+    kick();   // some browsers expose an already-paired pad without firing the event
+  }
+  function gamepadLoop() { _padRAF = 0; try { pollGamepad(); } catch (e) {} _padRAF = requestAnimationFrame(gamepadLoop); }
+  function releasePadKeys() { for (const k in _padKeys) { if (_padKeys[k]) { game.keys[k] = false; _padKeys[k] = false; } } }
+  function padSend(key) { onKeyDown({ key, repeat: false, preventDefault() {} }); onKeyUp({ key }); }
+  function pollGamepad() {
+    const pads = navigator.getGamepads(); if (!pads) return;
+    let gp = null; for (let i = 0; i < pads.length; i++) { if (pads[i] && pads[i].connected) { gp = pads[i]; break; } }
+    if (!gp) { releasePadKeys(); return; }
+    const B = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed), AX = (i) => gp.axes[i] || 0;
+    const dz = 0.35;
+    let mx = 0, my = 0;
+    if (Math.abs(AX(0)) > dz) mx = AX(0);
+    if (Math.abs(AX(1)) > dz) my = AX(1);
+    if (B(14)) mx = -1; else if (B(15)) mx = 1;     // d-pad L/R
+    if (B(12)) my = -1; else if (B(13)) my = 1;     // d-pad U/D
+    const edge = (key, now) => { const was = !!_padPrev[key]; _padPrev[key] = now; return now && !was; };
+    const inMatch = game.screen === 'match' && game.phase !== 'ended';
+    if (inMatch) {
+      const want = { ArrowUp: my < -dz, ArrowDown: my > dz, ArrowLeft: mx < -dz, ArrowRight: mx > dz };
+      for (const k in want) { if (want[k]) { game.keys[k] = true; _padKeys[k] = true; } else if (_padKeys[k]) { game.keys[k] = false; _padKeys[k] = false; } }
+      if (edge('A', B(0))) { SFX.resume(); onPinch(); }                         // pass / shoot / tackle / switch
+      if (edge('start', B(9)) || edge('select', B(8))) pauseMatch();
+      if (edge('dash', B(5) || B(7))) { const ch = Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'right' : 'left') : (my > 0 ? 'down' : 'up'); if (mx || my) tryDash(ch); }
+    } else {
+      releasePadKeys();
+      const dir = (mx * mx + my * my) < dz * dz ? null : (Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'ArrowRight' : 'ArrowLeft') : (my > 0 ? 'ArrowDown' : 'ArrowUp'));
+      if (dir && dir !== _padPrev._navdir) { _padPrev._navdir = dir; padSend(dir); }
+      else if (!dir) _padPrev._navdir = null;
+      if (edge('A', B(0))) { SFX.resume(); padSend('Enter'); }
+      if (edge('start', B(9))) padSend('Enter');
+      if (edge('B', B(1))) padSend('Escape');
+    }
   }
   function setupTouchControls() {
     const root = $('touch-controls'); if (!root) return;
@@ -3861,6 +3904,7 @@
       gfx: (v) => { game.settings.gfx = v || '3D'; updateHudLayout(); if (game.settings.gfx === '3D') ensure3D(); else showPitch3D(false); }, r3d: () => R3D,
       cam: (v) => { game.settings.cam = v || 'Side'; applyCam(); updateHudLayout(); render(); }, toggleCam: () => toggleCam(),
       half: () => game.half, secondHalf: () => startSecondHalf(), atkUp: (s) => atkUp(s),
+      pollPad: () => pollGamepad(),
       setpiece: () => game.sp, spStart: (type) => triggerSetPiece(type || 'fk', type === 'corner' ? 'L' : CFG.PW/2, 6),
       spKey: (k) => spInput(k), spForce: (aim, power) => { if (game.sp) { game.sp.aim = aim; game.sp.power = power; spCommit(); } },
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },

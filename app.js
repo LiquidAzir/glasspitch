@@ -1172,15 +1172,13 @@
     const b = game.ball;
     const youHaveBall = b.owner != null && playerById(b.owner) && playerById(b.owner).side === 'home';
     if (youHaveBall && b.owner === p.id) {
-      if (inShootRange(p)) doShoot(p); else doPass(p);
+      if (inShootRange(p)) doShoot(p); else doPass(p);              // on the ball → attack
     } else if (youHaveBall) {
-      // teammate has the ball — switch to them so you can pass/shoot
-      setActive(b.owner, true);
-    } else if (dist(p, b) < CFG.tackleR) {
-      doTackle(p);
+      setActive(b.owner, true);                                     // a teammate has it → take control of the carrier
+    } else if (game.tutorial) {
+      if (dist(p, b) < CFG.tackleR) doTackle(p);                    // tutorial keeps its guided tackle step
     } else {
-      // manual switch to the next-best presser
-      switchActive();
+      switchActive();                                               // DEFENCE → switch to the player nearest the ball-carrier (steal by running into them)
     }
   }
   function inShootRange(p) {
@@ -1189,9 +1187,10 @@
     const d = len(p.x - gx, p.y - gy);
     return d < 30 && (up ? p.y < CFG.PL * 0.62 : p.y > CFG.PL * 0.38);
   }
-  function switchActive() {
+  function switchActive() {   // hand control to the outfielder nearest the ball-carrier (defence)
+    const b = game.ball;
     const cands = game.home.players.filter(p => !p.isGK && p.id !== game.activeId);
-    cands.sort((a, b) => timeToBall(a) - timeToBall(b));
+    cands.sort((a, c) => dist2(a.x, a.y, b.x, b.y) - dist2(c.x, c.y, b.x, b.y));
     if (cands[0]) setActive(cands[0].id, true);
   }
   function timeToBall(p) {
@@ -2697,7 +2696,7 @@
     'Swipe  ← ↑ → ↓  to steer your player. They run on their own — you just point them where to go.',
     'You have the ball. Pinch (tap) to PASS it to your teammate up ahead.',
     'Now carry it at the goal. When the chip turns to SHOOT, pinch to score!',
-    'Defend! Steer onto the opponent with the ball, then pinch to TACKLE and win it back.',
+    'Defend! Pinch switches to your nearest player — then steer them into the opponent to win the ball back.',
     "That's everything — you're ready. Pinch to start playing.",
   ];
   function startTutorial() {

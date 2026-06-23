@@ -907,36 +907,58 @@
     if (s > 0.93 && s < 1.07) s = 1;                 // ~square viewport (glasses) → exact 1:1
     app.style.transform = 'scale(' + (s || 1) + ')';
   }
-  // Touch (phone): drag on the pitch to steer, tap to act. Mouse (PC): click the pitch to act.
-  // All routed through the key path so the view-rotation + ↑↓↑↓ menu + dash combos still apply.
+  function isPhone() {
+    const touch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+    return touch && Math.min(window.innerWidth, window.innerHeight) < 560;   // a phone, not the ~600px glasses or a tablet
+  }
+  // Touch: drag on the pitch to steer, tap to act. Mouse (PC): click the pitch to act.
+  // Match steering sets game.keys DIRECTLY (not via onKeyDown) so a wandering drag can't
+  // accidentally trigger the ↑↓↑↓ menu / double-swipe dash; the on-screen d-pad covers those.
   function setupAdaptiveControls() {
     const app = $('app') || document.body;
-    const isControl = (t) => t && t.closest && t.closest('button, .opt-row, #touch-controls, [data-action], a, input');
-    const gameplay = () => game.screen === 'match' || game.screen === 'shootout' || game.screen === 'setpiece';
-    const dirOf = (dx, dy) => { if (Math.hypot(dx, dy) < 16) return null; return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'ArrowRight' : 'ArrowLeft') : (dy > 0 ? 'ArrowDown' : 'ArrowUp'); };
-    const tap = () => { onKeyDown({ key: 'Enter', repeat: false, preventDefault() {} }); onKeyUp({ key: 'Enter' }); };
-    let start = null, held = null, moved = false;
-    const release = () => { if (held) { onKeyUp({ key: held }); held = null; } };
+    const isControl = (t) => t && t.closest && t.closest('button, #touch-controls, [data-action], a, input, .opt-row, .ts-arrow');
+    const inMatch = () => game.screen === 'match';
+    const inMini = () => game.screen === 'shootout' || game.screen === 'setpiece';
+    const gameplay = () => inMatch() || inMini();
+    const DIR4 = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    const setDir = (dir) => DIR4.forEach(k => { game.keys[k] = (k === dir); });
+    const clearDirs = () => DIR4.forEach(k => { game.keys[k] = false; });
+    const dirOf = (dx, dy) => { if (dx * dx + dy * dy < 196) return null; return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'ArrowRight' : 'ArrowLeft') : (dy > 0 ? 'ArrowDown' : 'ArrowUp'); };   // 14px deadzone
+    const sendKey = (key) => { onKeyDown({ key, repeat: false, preventDefault() {} }); onKeyUp({ key }); };
+    const act = () => { if (inMatch()) onPinch(); else sendKey('Enter'); };
+    let start = null, moved = false, lastTouch = 0;
     app.addEventListener('touchstart', (e) => {
+      lastTouch = performance.now();
       if (!gameplay() || isControl(e.target)) { start = null; return; }
-      const t = e.touches[0]; start = { x: t.clientX, y: t.clientY, time: performance.now() }; moved = false; e.preventDefault();
+      const t = e.touches[0]; start = { x: t.clientX, y: t.clientY }; moved = false; e.preventDefault();
     }, { passive: false });
     app.addEventListener('touchmove', (e) => {
+      lastTouch = performance.now();
       if (!start) return;
       const t = e.touches[0]; const dir = dirOf(t.clientX - start.x, t.clientY - start.y);
-      if (dir) { moved = true; if (dir !== held) { release(); held = dir; onKeyDown({ key: dir, repeat: false, preventDefault() {} }); } }
+      if (dir) {
+        moved = true;
+        if (inMatch()) setDir(dir); else sendKey(dir);    // steer (held) / aim (momentary)
+        start = { x: t.clientX, y: t.clientY };            // re-anchor so a continued drag tracks the latest direction
+      }
       e.preventDefault();
     }, { passive: false });
     app.addEventListener('touchend', (e) => {
-      if (!start) return; const s = start; start = null; release();
-      if (!moved && performance.now() - s.time < 400) tap();          // quick tap → action
+      lastTouch = performance.now();
+      if (!start) return; start = null;
+      if (inMatch()) clearDirs();
+      if (!moved) act();                                   // tap → action / switch
+      e.preventDefault();
     }, { passive: false });
-    app.addEventListener('touchcancel', () => { start = null; release(); }, { passive: false });
-    app.addEventListener('mousedown', (e) => { if (gameplay() && !isControl(e.target)) tap(); });   // PC: click pitch = action
+    app.addEventListener('touchcancel', () => { if (inMatch()) clearDirs(); start = null; }, { passive: false });
+    app.addEventListener('mousedown', (e) => {
+      if (performance.now() - lastTouch < 700) return;     // ignore the synthetic mouse event a touch fires
+      if (gameplay() && !isControl(e.target)) act();
+    });
   }
   function setupTouchControls() {
     const root = $('touch-controls'); if (!root) return;
-    if (game.settings.touch) showTouch(true);
+    if (game.settings.touch || isPhone()) showTouch(true);   // phones get the d-pad + switch button by default (glasses don't)
     root.querySelectorAll('[data-touch-key]').forEach(btn => {
       const key = btn.dataset.touchKey;
       const press = (ev) => { ev.preventDefault(); onKeyDown({ key, repeat: false, preventDefault(){} }); };

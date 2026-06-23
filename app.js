@@ -215,9 +215,38 @@
       if (freq) { const f = c.createBiquadFilter(); f.type = type || 'bandpass'; f.frequency.value = freq; f.Q.value = 0.7; src.connect(f); node = f; }
       node.connect(g); g.connect(master); src.start(t); src.stop(t + dur + 0.03);
     }
+    // continuous procedural crowd-ambience bed + roars; level driven by match momentum
+    let crowdSrc = null, crowdGain = null, crowdLP = null;
+    function crowdStart() {
+      if (!enabled) return; const c = ensure(); if (!c || crowdSrc) return;
+      const n = Math.floor(c.sampleRate * 2);
+      const buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
+      let last = 0; for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; last = last * 0.965 + w * 0.035; d[i] = last * 7; }  // smoothed → soft murmur
+      crowdSrc = c.createBufferSource(); crowdSrc.buffer = buf; crowdSrc.loop = true;
+      crowdLP = c.createBiquadFilter(); crowdLP.type = 'lowpass'; crowdLP.frequency.value = 560; crowdLP.Q.value = 0.5;
+      crowdGain = c.createGain(); crowdGain.gain.value = 0.04;
+      crowdSrc.connect(crowdLP); crowdLP.connect(crowdGain); crowdGain.connect(master);
+      try { crowdSrc.start(); } catch (e) {}
+    }
+    function crowdStop() { if (crowdSrc) { try { crowdSrc.stop(); } catch (e) {} } crowdSrc = null; crowdGain = null; crowdLP = null; }
+    function crowdLevel(x) {   // 0..1 ambient intensity
+      if (!crowdGain || !ctx) return; const t = ctx.currentTime;
+      crowdGain.gain.setTargetAtTime(clamp(0.03 + x * 0.10, 0.02, 0.16), t, 0.7);
+      crowdLP.frequency.setTargetAtTime(440 + x * 380, t, 0.9);
+    }
+    function crowdRoar(intensity) {   // goal / big chance swell
+      if (!enabled) return; const c = ensure(); if (!c) return; if (!crowdGain) crowdStart(); if (!crowdGain) return;
+      const t = ctx.currentTime, peak = clamp(0.16 + intensity * 0.20, 0.16, 0.42);
+      crowdGain.gain.cancelScheduledValues(t); crowdGain.gain.setValueAtTime(Math.max(0.001, crowdGain.gain.value), t);
+      crowdGain.gain.linearRampToValueAtTime(peak, t + 0.12); crowdGain.gain.setTargetAtTime(0.05, t + 0.45, 1.1);
+      crowdLP.frequency.cancelScheduledValues(t); crowdLP.frequency.setValueAtTime(crowdLP.frequency.value, t);
+      crowdLP.frequency.linearRampToValueAtTime(1500, t + 0.18); crowdLP.frequency.setTargetAtTime(560, t + 0.5, 1.0);
+      noise(0.7, 0.10 + intensity * 0.06, 1100, 'lowpass');
+    }
     return {
       resume() { const c = ensure(); if (c && c.state === 'suspended') c.resume(); },
-      setEnabled(v) { enabled = v; }, isEnabled() { return enabled; },
+      setEnabled(v) { enabled = v; if (!v) crowdStop(); }, isEnabled() { return enabled; },
+      crowdStart, crowdStop, crowdLevel, crowdRoar,
       // ball strike — punchy "thock": pitch-dropping body thump + sub + a short leathery contact snap
       kick()    { tone(200, 0.11, 'triangle', 0.34, 52); tone(110, 0.17, 'sine', 0.26, 40); noise(0.05, 0.18, 2300, 'bandpass'); noise(0.02, 0.10, 600, 'lowpass'); },
       // a lighter, crisper "tok" for a pass
@@ -238,7 +267,8 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', chase: 'Off', sound: true, touch: false },
+    mom: 0,                                          // match momentum: -1 (all away) .. +1 (all home)
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -305,7 +335,7 @@
   }
 
   function onScreenEnter(id) {
-    if (id === 'title') renderTitle();
+    if (id === 'title') { SFX.crowdStop(); renderTitle(); }
     else if (id === 'team-select') renderTeamSelect();
     else if (id === 'settings') renderSettings();
     else if (id === 'pause') {
@@ -331,6 +361,7 @@
       const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
       const pc = $('pitch'); if (pc) pc.classList.remove('punch');
       const p3 = $('pitch3d'); if (p3) p3.classList.remove('punch');
+      if (game.settings.sound) SFX.crowdStart();   // stadium ambience for the duration of the match
       game.keys = {}; game.tapped = {}; game.steer = { x: 0, y: 0 }; game.lastSteerT = -10;   // drop any stuck swipe on (re)entering the match (pause/resume, halftime)
       updateHudLayout(); render(); updateHud(true);
     }
@@ -380,7 +411,7 @@
       activeId: game.activeId, activeLockT: game.activeLockT || 0,
       lastTouch: game.lastTouch, lastKicker: game.lastKicker, lastTouchPlayer: game.lastTouchPlayer,
       concede: game._concede || null, lastWasShot: !!game._lastWasShot,
-      watching: !!game.watching, allAI: !!game._allAI,
+      watching: !!game.watching, allAI: !!game._allAI, mom: game.mom || 0,
       poss: { home: game.poss.home, away: game.poss.away },
       stats: { shots: { ...game.stats.shots }, sot: { ...game.stats.sot }, fouls: { ...game.stats.fouls } },
     };
@@ -410,7 +441,7 @@
       else { game.watching = false; game._allAI = false; }
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
       game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
-      game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot;
+      game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot; game.mom = snap.mom || 0;
       game.poss = (snap.poss && typeof snap.poss.home === 'number') ? { home: snap.poss.home, away: snap.poss.away } : { home: 1, away: 1 };
       game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
       game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
@@ -455,6 +486,7 @@
     const os = $('opt-setpieces'); if (os) os.textContent = game.settings.setPieces ? 'ON' : 'OFF';
     const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
     const oc = $('opt-cam'); if (oc) oc.textContent = game.settings.cam || 'Side';
+    const och = $('opt-chase'); if (och) och.textContent = game.settings.chase || 'Off';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -737,7 +769,7 @@
     assignKitColors();                              // away gets a change strip if the colours clash
     if (R3D && R3D.ready) refresh3DKits();          // recolour 3D models for the new teams
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
-    game.clockSec = 0; game.half = 1; game.phase = 'play';
+    game.clockSec = 0; game.half = 1; game.phase = 'play'; game.mom = 0; game._comT = rrange(20, 40);
     game.poss = { home: 1, away: 1 };
     game.stats = { shots:{home:0,away:0}, sot:{home:0,away:0}, fouls:{home:0,away:0} };
     game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
@@ -764,6 +796,15 @@
   function atkUp(side) { return (side === 'home') !== (game.half === 2); }
   function goalY(side) { return atkUp(side) ? 0 : CFG.PL; }       // the goal this side shoots at
   function ownGoalY(side) { return atkUp(side) ? CFG.PL : 0; }    // the goal this side defends
+  // ----- momentum / morale -----
+  function momFor(side) { return side === 'home' ? game.mom : -game.mom; }   // this side's momentum, -1..1
+  function bumpMom(side, amt) { game.mom = clamp(game.mom + (side === 'home' ? 1 : -1) * amt, -1, 1); }
+  function momentumTick(dt) {
+    const owner = playerById(game.ball.owner);
+    const poss = owner ? (owner.side === 'home' ? 1 : -1) : 0;
+    game.mom += (poss * 0.45 - game.mom) * dt * 0.25;   // ease toward a possession-based baseline; goal/shot impulses ride on top
+    game.mom = clamp(game.mom, -1, 1);
+  }
   function allPlayers() { return game.home.players.concat(game.away.players); }
   // O(1)-ish, allocation-free (ids are unique across both rosters) — called many times per frame
   function playerById(id) {
@@ -1012,6 +1053,7 @@
       case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
       case 'toggle-gfx': toggleGfx(); break;
       case 'toggle-cam': toggleCam(); break;
+      case 'toggle-chase': toggleChase(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -1026,7 +1068,7 @@
   function toggleSound() {
     game.settings.sound = !game.settings.sound;
     SFX.setEnabled(game.settings.sound);
-    if (game.settings.sound) SFX.resume();
+    if (game.settings.sound) { SFX.resume(); if (game.screen === 'match') SFX.crowdStart(); }
     saveStore();
     const o = $('opt-sound'); if (o) o.textContent = game.settings.sound ? 'ON' : 'OFF';
     const b = $('sound-toggle-btn'); if (b) b.textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
@@ -1123,6 +1165,7 @@
     const pside = owner ? owner.side : game.lastTouch;
     game.poss[pside] += dt;
     if (game.ticker) tickTicker();        // reveal other matches' goals as they "happen"
+    momentumTick(dt); commentaryTick(dt);
 
     chooseActive(dt);
     // alternate which side updates first each frame so neither gets a systematic
@@ -1306,10 +1349,12 @@
       }
     } else if (steering) {
       dx = game.steer.x; dy = game.steer.y;
-    } else {
+    } else if (game.settings.chase === 'On') {
       // auto-seek the ball (intercept its near-future position)
       const tgtx = b.x + b.vx * 0.18, tgty = b.y + b.vy * 0.18;
       dx = tgtx - p.x; dy = tgty - p.y;
+    } else {
+      return { x: 0, y: 0, sprint: 0 };   // hold position — your player moves only when you steer
     }
     const n = len(dx, dy) || 1;
     return { x: dx / n, y: dy / n, sprint: haveBall ? 1 : 1.06 };
@@ -1349,6 +1394,7 @@
       const deficit = teamObj(otherSide(p.side)).score - team.score;
       push += clamp(deficit * 0.07, -0.06, 0.18);
     }
+    push += clamp(momFor(p.side) * 0.085, -0.10, 0.10);   // momentum: the team on top commits forward; the other parks deeper
     let ny = clamp(form[p.idx].ny + push + (ballNy - 0.5) * 0.5, 0.05, 0.95);
     let ty = attackUp ? CFG.PL * (1 - ny) : CFG.PL * ny;
 
@@ -1364,7 +1410,7 @@
     } else if (!weHaveBall && closest === 0) {
       // primary presser — close in goal-side and actually challenge for the ball
       const ox = owner.x, oy = owner.y;
-      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y; sprint = 1.02 * pressMul;
+      dx = ox - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y; sprint = 1.02 * pressMul * (1 + clamp(momFor(p.side), 0, 1) * 0.10);   // momentum → sharper press
     } else if (!weHaveBall && closest === 1 && dist(p, b) < 28 * pressMul) {
       // second man — CONTAIN: sit ~5m goal-side, cut the forward lane, don't swarm
       const ox = owner.x, oy = owner.y;
@@ -1566,6 +1612,7 @@
   }
   function kickToGoal(p, side, aimX, acc) {
     game.stats.shots[side]++;
+    bumpMom(side, 0.10);                              // taking a shot builds momentum
     const attackUp = atkUp(side);
     const gy = attackUp ? 0 : CFG.PL;
     const goalDist = len(p.x - CFG.PW/2, p.y - gy);
@@ -1581,7 +1628,7 @@
     const skill = (acc && acc.shot) || 0.9;
     const err = (1 - skill) * 6 + clamp(goalDist/30,0,1) * 1.4;
     const ex = tx + rrange(-err, err), ey = ty + rrange(-1, 1);
-    if (Math.abs(ex - CFG.PW/2) < CFG.goalHalfW) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; }   // on-frame = on target
+    if (Math.abs(ex - CFG.PW/2) < CFG.goalHalfW) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; bumpMom(side, 0.06); SFX.crowdRoar(0.45); }   // on-frame = on target → crowd swells
     kickRaw(p, ex, ey, CFG.ballMax * (0.78 + (teamObj(side).def.r.ATT/100)*0.22), true);
   }
   function goalAimedOnTarget(tx) { return Math.abs(tx - CFG.PW/2) < CFG.goalHalfW; }
@@ -1876,7 +1923,8 @@
     }
     showBanner(ownGoal ? 'OWN GOAL' : 'GOAL!');
     goalCommentary(side, scorer, ownGoal);
-    SFX.goal(); pitchPunch();
+    SFX.goal(); SFX.crowdRoar(1); pitchPunch();
+    bumpMom(side, 0.55);                              // a goal swings the momentum hard to the scorer
     spawnGoalBurst(side);
     paintScoreboard();
     const b = game.ball; b.owner = null; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0;
@@ -1895,7 +1943,35 @@
     const late = min >= 80;
     let prefix = ownGoal ? 'Own goal! ' : 'GOAL! ';
     if (late && !ownGoal) prefix = pick(['LATE GOAL! ', 'DRAMA! ']);
-    say(prefix + (who ? who + ' — ' : '') + state + '.');
+    let extra = '';
+    if (!ownGoal && momFor(side) < -0.35) extra = pick([' Against the run of play!', ' Out of nowhere!', ' A smash and grab!']);
+    else if (!ownGoal && momFor(side) > 0.5) extra = pick([' Thoroughly deserved.', ' The pressure finally told.', ' That had been coming.']);
+    say(prefix + (who ? who + ' — ' : '') + state + '.' + extra);
+  }
+  // ----- dynamic colour commentary: occasional context-aware lines during open play -----
+  function commentaryTick(dt) {
+    if (game.matchMode === 'tutorial') return;
+    game._comT = (game._comT || 0) - dt;
+    if (game._comT > 0 || game.phase !== 'play') return;
+    game._comT = rrange(26, 46);                 // next colour line in ~26-46 sim-seconds
+    const line = pickColorLine(); if (line) say(line);
+  }
+  function pickColorLine() {
+    const hs = game.home.score, as = game.away.score, min = Math.floor(game.clockSec / 60), m = game.mom;
+    const onTop = m > 0.45 ? game.home.def : (m < -0.45 ? game.away.def : null);
+    const under = onTop ? (onTop === game.home.def ? game.away.def : game.home.def) : null;
+    const lead = hs === as ? null : (hs > as ? game.home.def : game.away.def);
+    const trail = lead ? (lead === game.home.def ? game.away.def : game.home.def) : null;
+    const gap = Math.abs(hs - as), bank = [];
+    if (onTop) bank.push(`${onTop.name} are turning the screw.`, `All ${onTop.name} at the moment.`, `${under.name} can't get out of their half.`, `${onTop.name} pouring forward.`, `${under.name} pinned right back.`);
+    else bank.push(`End-to-end stuff, this.`, `A real contest brewing here.`, `Neither side giving an inch.`, `The tempo is high out there.`, `Both teams going for it.`);
+    if (lead && gap >= 2) bank.push(`${lead.name} look comfortable.`, `${trail.name} need something special now.`, `${lead.name} cruising.`);
+    else if (lead && gap === 1) bank.push(`${trail.name} pushing for the equaliser.`, `Just one goal in it — anyone's game.`, `${lead.name} guarding a slender lead.`);
+    else if (hs === as && hs + as > 0) bank.push(`All square — and you sense a winner coming.`, `Level, end to end.`);
+    else bank.push(`Still goalless, but plenty of intent.`, `No breakthrough yet.`);
+    if (min >= 80) bank.push(`Into the final stretch — tension rising.`, `Squeaky-bum time, this.`, trail ? `The clock is the enemy for ${trail.name}.` : `Big finish brewing.`);
+    else if (min <= 8) bank.push(`Bright start to this one.`, `Sides feeling each other out early.`);
+    return pick(bank);
   }
   function pitchPunch() { const el = (game.settings.gfx === '3D' && R3D && R3D.ready) ? $('pitch3d') : $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }
 
@@ -1963,6 +2039,7 @@
   function goHalftime() { game.phase = 'play'; SFX.whistle(); navigateTo('halftime'); }
   function goFulltime() {
     game.phase = 'ended';
+    SFX.crowdRoar(0.8); SFX.crowdStop();           // final whistle
     clearMatch();                                  // match over — no longer resumable
     const wasWatch = game.matchMode === 'watch';
     game.watching = false; game._allAI = false;    // leave spectator mode at the whistle
@@ -2951,6 +3028,10 @@
     saveStore(); renderSettings(); applyCam(); updateHudLayout();
     if (game.settings.gfx === '3D' && R3D && R3D.ready) render();   // live update if 3D is showing
   }
+  function toggleChase() {   // On = your player auto-runs to the ball; Off = it holds until you steer
+    game.settings.chase = game.settings.chase === 'On' ? 'Off' : 'On';
+    saveStore(); renderSettings();
+  }
   // In the 3D Behind-the-net view we lift the action chip + dash pip into the empty band
   // below the scoreboard (CSS class) so the camera can drop lower and zoom into the field.
   function updateHudLayout() {
@@ -3463,6 +3544,13 @@
     $('sb-half').textContent = game.half === 1 ? '1st' : '2nd';
     const tot = game.poss.home + game.poss.away || 1;
     $('possession-fill').style.width = (game.poss.home / tot * 100).toFixed(0) + '%';
+    const mf = $('mom-fill');
+    if (mf) {
+      const m = clamp(game.mom || 0, -1, 1), half = 80, w = Math.abs(m) * half;
+      mf.style.left = (m >= 0 ? half : half - w) + 'px'; mf.style.width = w + 'px';
+      mf.style.background = m >= 0 ? 'var(--home-col)' : 'var(--away-col)';
+    }
+    SFX.crowdLevel(clamp(0.25 + Math.abs(game.mom || 0) * 0.7, 0, 1));   // crowd swells with the momentum
     const pip = $('dash-pip'); if (pip) pip.classList.toggle('cooling', performance.now() < game.dashCdUntil);
     // spectator: show a WATCHING badge, hide the player controls
     const badge = $('watch-badge'); if (badge) badge.classList.toggle('hidden', !game.watching);

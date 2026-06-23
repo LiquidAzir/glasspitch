@@ -263,6 +263,10 @@ html, body {
   border: 1px solid rgba(0,0,0,0.4);
 }
 .possession-fill { height: 100%; width: 50%; background: var(--home-col, #3ef08f); transition: width 400ms ease; }
+/* momentum tug-of-war bar — centre-anchored fill grows toward the side on top */
+.momentum { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); width: 160px; height: 4px; border-radius: 3px; background: rgba(255,255,255,0.10); border: 1px solid rgba(0,0,0,0.4); }
+.momentum::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.45); }
+.mom-fill { position: absolute; top: 0; bottom: 0; left: 80px; width: 0; border-radius: 3px; transition: left 280ms ease, width 280ms ease, background 500ms ease; }
 
 .match-banner {
   position: absolute; top: 40%; left: 0; right: 0;

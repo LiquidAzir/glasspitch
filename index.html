@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=37">
+  <link rel="stylesheet" href="styles.css?v=38">
 </head>
 <body>
   <div id="app">
@@ -104,6 +104,8 @@
         <div class="possession">
           <div class="possession-fill" id="possession-fill"></div>
         </div>
+        <!-- momentum "tug of war" bar (fills toward whichever side is on top) -->
+        <div class="momentum" id="momentum"><span class="mom-fill" id="mom-fill"></span></div>
 
         <!-- live "other scores" ticker (league/career) -->
         <div class="match-ticker" id="match-ticker"></div>
@@ -432,6 +434,10 @@
           <span class="opt-label">3D Camera <span class="subs-auto-hint">(side / behind)</span></span>
           <span class="opt-value" id="opt-cam">Side</span>
         </button>
+        <button class="opt-row focusable" data-action="toggle-chase">
+          <span class="opt-label">Auto-chase ball <span class="subs-auto-hint">(off = holds till you steer)</span></span>
+          <span class="opt-value" id="opt-chase">Off</span>
+        </button>
         <button class="opt-row focusable" data-action="toggle-sound">
           <span class="opt-label">Sound</span>
           <span class="opt-value" id="opt-sound">ON</span>
@@ -448,6 +454,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=37"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>

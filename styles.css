@@ -238,6 +238,12 @@ html, body {
 #match { padding: 0; }
 #pitch { position: absolute; inset: 0; width: 600px; height: 600px; }
 #pitch3d { position: absolute; inset: 0; width: 600px; height: 600px; z-index: 1; }
+/* rain overlay (weather) — light diagonal streaks over the pitch, under the HUD */
+#rain { position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; transition: opacity 600ms ease;
+  background-image: repeating-linear-gradient(102deg, rgba(190,215,255,0) 0 6px, rgba(190,215,255,0.16) 6px 7px);
+  background-size: 100% 26px; }
+#match.weather-rain #rain { opacity: 1; animation: rainfall 0.5s linear infinite; }
+@keyframes rainfall { from { background-position: 0 0; } to { background-position: -26px 130px; } }
 .hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 
 .scoreboard {

@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=38">
+  <link rel="stylesheet" href="styles.css?v=39">
 </head>
 <body>
   <div id="app">
@@ -34,6 +34,7 @@
           <button class="title-btn focusable" data-action="goto-career">Career</button>
           <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
           <button class="title-btn focusable" data-action="goto-watch">Watch Match</button>
+          <button class="title-btn focusable" data-action="goto-shootout">Penalty Shootout</button>
           <button class="title-btn focusable" data-action="goto-how">How to Play</button>
           <button class="title-btn focusable" data-action="goto-settings">Settings</button>
         </nav>
@@ -82,6 +83,7 @@
     <div id="match" class="screen hidden">
       <canvas id="pitch" width="600" height="600"></canvas>
       <canvas id="pitch3d" width="600" height="600" class="hidden"></canvas>
+      <div id="rain" aria-hidden="true"></div>
 
       <div id="hud" class="hud">
         <!-- Scoreboard -->
@@ -438,6 +440,10 @@
           <span class="opt-label">Auto-chase ball <span class="subs-auto-hint">(off = holds till you steer)</span></span>
           <span class="opt-value" id="opt-chase">Off</span>
         </button>
+        <button class="opt-row focusable" data-action="cycle-weather">
+          <span class="opt-label">Weather <span class="subs-auto-hint">(rain = skiddy ball)</span></span>
+          <span class="opt-value" id="opt-weather">Auto</span>
+        </button>
         <button class="opt-row focusable" data-action="toggle-sound">
           <span class="opt-label">Sound</span>
           <span class="opt-value" id="opt-sound">ON</span>
@@ -454,6 +460,6 @@
     </div>
 
   </div>
-  <script src="app.js?v=38"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

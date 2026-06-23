@@ -267,8 +267,9 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', chase: 'Off', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', chase: 'Off', weather: 'Auto', sound: true, touch: false },
     mom: 0,                                          // match momentum: -1 (all away) .. +1 (all home)
+    weather: 'clear', _ballDecelMul: 1,             // rain → less friction (faster/skiddy ball)
     record: { w: 0, d: 0, l: 0 },
     // match
     home: null, away: null, ball: null,
@@ -362,6 +363,7 @@
       const pc = $('pitch'); if (pc) pc.classList.remove('punch');
       const p3 = $('pitch3d'); if (p3) p3.classList.remove('punch');
       if (game.settings.sound) SFX.crowdStart();   // stadium ambience for the duration of the match
+      applyWeatherClass();
       game.keys = {}; game.tapped = {}; game.steer = { x: 0, y: 0 }; game.lastSteerT = -10;   // drop any stuck swipe on (re)entering the match (pause/resume, halftime)
       updateHudLayout(); render(); updateHud(true);
     }
@@ -411,7 +413,7 @@
       activeId: game.activeId, activeLockT: game.activeLockT || 0,
       lastTouch: game.lastTouch, lastKicker: game.lastKicker, lastTouchPlayer: game.lastTouchPlayer,
       concede: game._concede || null, lastWasShot: !!game._lastWasShot,
-      watching: !!game.watching, allAI: !!game._allAI, mom: game.mom || 0,
+      watching: !!game.watching, allAI: !!game._allAI, mom: game.mom || 0, weather: game.weather || 'clear',
       poss: { home: game.poss.home, away: game.poss.away },
       stats: { shots: { ...game.stats.shots }, sot: { ...game.stats.sot }, fouls: { ...game.stats.fouls } },
     };
@@ -442,6 +444,7 @@
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
       game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
       game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot; game.mom = snap.mom || 0;
+      game.weather = snap.weather || 'clear'; game._ballDecelMul = game.weather === 'rain' ? 0.62 : 1;
       game.poss = (snap.poss && typeof snap.poss.home === 'number') ? { home: snap.poss.home, away: snap.poss.away } : { home: 1, away: 1 };
       game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
       game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
@@ -487,6 +490,7 @@
     const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
     const oc = $('opt-cam'); if (oc) oc.textContent = game.settings.cam || 'Side';
     const och = $('opt-chase'); if (och) och.textContent = game.settings.chase || 'Off';
+    const ow = $('opt-weather'); if (ow) ow.textContent = game.settings.weather || 'Auto';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -542,10 +546,11 @@
     const ts = game.ts;
     const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career';
     const watch = ts.mode === 'watch';
-    $('ts-title').textContent = watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : watch ? 'WATCH' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : 'Select';
-    $('ts-random').classList.toggle('hidden', tour || watch || ts.step === 0);
+    const shoot = ts.mode === 'shootout';
+    $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
+    $('ts-random').classList.toggle('hidden', tour || watch || shoot || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
     crest.textContent = t.glyph;
@@ -560,7 +565,7 @@
         <span class="rt-val">${v}</span></div>`;
     }).join('');
     $('ts-dots').innerHTML = TEAMS.map((_, i) => `<span class="ts-dot ${i===ts.idx?'on':''}"></span>`).join('');
-    const dEl = $('ts-diff'); if (dEl) { dEl.classList.toggle('hidden', watch); dEl.textContent = `Difficulty · ${game.settings.difficulty}`; }
+    const dEl = $('ts-diff'); if (dEl) { dEl.classList.toggle('hidden', watch || shoot); dEl.textContent = `Difficulty · ${game.settings.difficulty}`; }
   }
   function tsMove(d) {
     game.ts.idx = (game.ts.idx + d + TEAMS.length) % TEAMS.length;
@@ -576,6 +581,11 @@
       else { ts.mode = null; startWatchMatch(ts.you, TEAMS[ts.idx].id); }
       return;
     }
+    if (ts.mode === 'shootout') {
+      if (ts.step === 0) { ts.you = TEAMS[ts.idx].id; ts.step = 1; ts.idx = (ts.idx + 1) % TEAMS.length; renderTeamSelect(); }
+      else { ts.mode = null; startShootout(ts.you, TEAMS[ts.idx].id, true); }
+      return;
+    }
     if (ts.step === 0) {
       ts.you = TEAMS[ts.idx].id;
       ts.step = 1;
@@ -589,6 +599,11 @@
   }
   function startWatchFlow() {
     game.ts.mode = 'watch'; game.ts.step = 0;
+    game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+    navigateTo('team-select');
+  }
+  function startShootoutFlow() {
+    game.ts.mode = 'shootout'; game.ts.step = 0;
     game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
     navigateTo('team-select');
   }
@@ -770,6 +785,7 @@
     if (R3D && R3D.ready) refresh3DKits();          // recolour 3D models for the new teams
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
     game.clockSec = 0; game.half = 1; game.phase = 'play'; game.mom = 0; game._comT = rrange(20, 40);
+    setWeather();
     game.poss = { home: 1, away: 1 };
     game.stats = { shots:{home:0,away:0}, sot:{home:0,away:0}, fouls:{home:0,away:0} };
     game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
@@ -786,7 +802,9 @@
   }
   function kickoffGo() {
     navigateTo('match', { addToHistory: false });
-    SFX.whistle(); say(`Kick off — ${game.home.def.name} v ${game.away.def.name}.`);
+    SFX.whistle();
+    if (game.weather === 'rain') say(pick(["Kick off — and it's pouring down. Tricky underfoot.", 'Kick off in the rain — the ball will fly today.', 'Wet night for it — kick off!']));
+    else say(`Kick off — ${game.home.def.name} v ${game.away.def.name}.`);
   }
 
   function teamObj(side) { return side === 'home' ? game.home : game.away; }
@@ -805,6 +823,14 @@
     game.mom += (poss * 0.45 - game.mom) * dt * 0.25;   // ease toward a possession-based baseline; goal/shot impulses ride on top
     game.mom = clamp(game.mom, -1, 1);
   }
+  // ----- weather -----
+  function setWeather() {   // choose per match from the setting (Auto = random)
+    const s = game.settings.weather || 'Auto';
+    game.weather = s === 'Rain' ? 'rain' : s === 'Clear' ? 'clear' : (srand() < 0.32 ? 'rain' : 'clear');
+    game._ballDecelMul = game.weather === 'rain' ? 0.62 : 1;   // wet pitch → ball slides faster/further
+    applyWeatherClass();
+  }
+  function applyWeatherClass() { const m = $('match'); if (m) m.classList.toggle('weather-rain', game.weather === 'rain'); }
   function allPlayers() { return game.home.players.concat(game.away.players); }
   // O(1)-ish, allocation-free (ids are unique across both rosters) — called many times per frame
   function playerById(id) {
@@ -1004,6 +1030,7 @@
       case 'career-tab-scorers': game.career.tab = 'scorers'; renderCareer(); break;
       case 'career-tab-history': game.career.tab = 'history'; renderCareer(); break;
       case 'goto-watch': startWatchFlow(); break;
+      case 'goto-shootout': startShootoutFlow(); break;
       case 'watch-toggle':                                         // menu toggle: hand off to the AI, or take control back
         if (game.watching) { exitWatch(true); } else enterWatch();
         resumeMatch(); break;
@@ -1054,6 +1081,7 @@
       case 'toggle-gfx': toggleGfx(); break;
       case 'toggle-cam': toggleCam(); break;
       case 'toggle-chase': toggleChase(); break;
+      case 'cycle-weather': cycleWeather(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -1594,11 +1622,37 @@
   function doPass(p) {
     const mate = homePassTarget(p) || pickForwardMate(p);
     if (!mate) { doShoot(p); return; }
-    const lead = 0.30;
-    const tx = mate.x + mate.vx * lead, ty = mate.y + mate.vy * lead;
-    kickTo(p, tx, ty, false, 0.97);
+    // contextual pass type (no extra gesture): through-ball into space behind, chip over a blocked lane, else ground
+    const up = atkUp(p.side), fy = up ? -1 : 1;
+    const aheadPt = { x: mate.x, y: clamp(mate.y + fy * 6, 1, CFG.PL - 1) };
+    const mateAhead = up ? (mate.y < p.y - 3) : (mate.y > p.y + 3);
+    const spaceAhead = nearestOppToPoint(aheadPt, p.side);
+    const d = len(mate.x - p.x, mate.y - p.y);
+    let type = 'ground';
+    if (mateAhead && spaceAhead > 6 && d > 11) type = 'through';
+    else if (!laneClear(p, mate) && d > 7) type = 'lofted';
+    if (type === 'through') {
+      const lead = 7 + Math.min(spaceAhead, 12) * 0.5;            // play it into the gap ahead of the runner
+      kickTo(p, mate.x + mate.vx * 0.4, clamp(mate.y + fy * lead, 1, CFG.PL - 1), false, 0.95, { drive: true });
+      if (p.side === 'home') say(pick(['Through ball!', 'Slips it in behind!', 'Played in!']));
+    } else if (type === 'lofted') {
+      kickLob(p, mate.x + mate.vx * 0.25, mate.y + mate.vy * 0.25, 0.94);  // chip over the blocked lane
+      if (p.side === 'home') say(pick(['Lofted over the top!', 'Chips it in!', 'Floated pass!']));
+    } else {
+      kickTo(p, mate.x + mate.vx * 0.30, mate.y + mate.vy * 0.30, false, 0.97);
+    }
     setActive(mate.id, true);
     if (game.tutorial) game.tutorial.passed = true;
+  }
+  function kickLob(p, tx, ty, skill) {
+    const b = game.ball, d = len(tx - p.x, ty - p.y), err = (1 - skill) * (d * 0.12 + 1.6);
+    const ex = tx + rrange(-err, err), ey = ty + rrange(-err, err);
+    const dx = ex - b.x, dy = ey - b.y, n = len(dx, dy) || 1;
+    const speed = clamp(Math.sqrt(2 * CFG.ballDecel * d) * 0.9, 8, CFG.ballMax);   // a touch under-hit (flies further through the air)
+    b.vx = dx/n * speed; b.vy = dy/n * speed;
+    b.z = 0; b.vz = clamp(2.4 + d * 0.06, 2.6, 5.2); b.shot = false; b.trail.length = 0;
+    b.owner = null; game.lastTouch = p.side; game.lastKicker = p.id; game.lastTouchPlayer = p.id; game._lastWasShot = false;
+    p.kickCd = 0.45; p.heading = Math.atan2(dy, dx); SFX.pass();
   }
   function pickForwardMate(p) {
     const mates = game.home.players.filter(m => m !== p && !m.isGK);
@@ -1632,11 +1686,12 @@
     kickRaw(p, ex, ey, CFG.ballMax * (0.78 + (teamObj(side).def.r.ATT/100)*0.22), true);
   }
   function goalAimedOnTarget(tx) { return Math.abs(tx - CFG.PW/2) < CFG.goalHalfW; }
-  function kickTo(p, tx, ty, isShot, skill) {
+  function kickTo(p, tx, ty, isShot, skill, opt) {
     const d = len(tx - p.x, ty - p.y);
     const err = (1 - skill) * (d * 0.10 + 1.5);
     // speed chosen so ground friction brings the ball ~to the target (v² = 2·decel·d), slight overhit
-    const speed = clamp(Math.sqrt(2 * CFG.ballDecel * d) * 1.08, 9, CFG.ballMax);
+    let speed = clamp(Math.sqrt(2 * CFG.ballDecel * d) * 1.08, 9, CFG.ballMax);
+    if (opt && opt.drive) speed = clamp(speed * 1.28, 9, CFG.ballMax);   // driven through-ball: more pace into space
     kickRaw(p, tx + rrange(-err, err), ty + rrange(-err, err), speed, isShot);
   }
   function kickRaw(p, tx, ty, speed, isShot) {
@@ -1734,7 +1789,7 @@
     // integrate + ground friction (less drag while airborne)
     const sp = len(b.vx, b.vy);
     if (sp > 0) {
-      const dec = CFG.ballDecel * (b.z > 0.3 ? 0.25 : 1) * dt;
+      const dec = CFG.ballDecel * (game._ballDecelMul || 1) * (b.z > 0.3 ? 0.25 : 1) * dt;   // wet pitch reduces friction
       const ns = Math.max(0, sp - dec);
       b.vx = b.vx / sp * ns; b.vy = b.vy / sp * ns;
       if (ns < CFG.ballStop && b.z <= 0) { b.vx = 0; b.vy = 0; }
@@ -2184,8 +2239,8 @@
 
   // ----- penalty shootout -----
   const PEN_ZONES = 3;
-  function startShootout(youId, oppId) {
-    game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [] };
+  function startShootout(youId, oppId, standalone) {
+    game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [], _standalone: !!standalone };
     navigateTo('shootout', { addToHistory: false });
     game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't auto-advance the aim
     SFX.whistle();
@@ -2243,6 +2298,7 @@
     const c = game.penalty; c.phase = 'done'; c.winner = side;
     drawPen(); penInstr();
     SFX.whistle(); if (side === 'home') SFX.goal();
+    if (c._standalone) { if (game._penFast) navigateTo('title'); else setTimeout(() => navigateTo('title'), 1900); return; }   // menu shootout → back to title
     const winnerId = side === 'home' ? c.you : c.opp;
     if (game._penFast) finishCupMatch(winnerId); else setTimeout(() => { finishCupMatch(winnerId); }, 1700);
   }
@@ -3030,6 +3086,11 @@
   }
   function toggleChase() {   // On = your player auto-runs to the ball; Off = it holds until you steer
     game.settings.chase = game.settings.chase === 'On' ? 'Off' : 'On';
+    saveStore(); renderSettings();
+  }
+  function cycleWeather() {
+    const seq = ['Auto', 'Clear', 'Rain'];
+    game.settings.weather = seq[(seq.indexOf(game.settings.weather || 'Auto') + 1) % seq.length];
     saveStore(); renderSettings();
   }
   // In the 3D Behind-the-net view we lift the action chip + dash pip into the empty band

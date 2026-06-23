@@ -367,6 +367,7 @@
       game.keys = {}; game.tapped = {}; game.steer = { x: 0, y: 0 }; game.lastSteerT = -10;   // drop any stuck swipe on (re)entering the match (pause/resume, halftime)
       updateHudLayout(); render(); updateHud(true);
     }
+    updateTouchVisibility();          // the phone d-pad bar shows only during a match
   }
 
   // ============================================================
@@ -906,10 +907,13 @@
     let s = Math.min(window.innerWidth / 600, window.innerHeight / 600);
     if (s > 0.93 && s < 1.07) s = 1;                 // ~square viewport (glasses) → exact 1:1
     app.style.transform = 'scale(' + (s || 1) + ')';
+    document.body.classList.toggle('is-phone', isPhone());   // top-align + show the bottom control bar on phones
+    updateTouchVisibility();
   }
   function isPhone() {
     const touch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-    return touch && Math.min(window.innerWidth, window.innerHeight) < 560;   // a phone, not the ~600px glasses or a tablet
+    const glasses = Math.abs(window.innerWidth - 600) < 60 && Math.abs(window.innerHeight - 600) < 60;
+    return touch && !glasses;   // any touchscreen that isn't the ~600x600 glasses (phones, tablets)
   }
   // Touch: drag on the pitch to steer, tap to act. Mouse (PC): click the pitch to act.
   // Match steering sets game.keys DIRECTLY (not via onKeyDown) so a wandering drag can't
@@ -958,7 +962,7 @@
   }
   function setupTouchControls() {
     const root = $('touch-controls'); if (!root) return;
-    if (game.settings.touch || isPhone()) showTouch(true);   // phones get the d-pad + switch button by default (glasses don't)
+    document.body.classList.toggle('is-phone', isPhone());
     root.querySelectorAll('[data-touch-key]').forEach(btn => {
       const key = btn.dataset.touchKey;
       const press = (ev) => { ev.preventDefault(); onKeyDown({ key, repeat: false, preventDefault(){} }); };
@@ -970,10 +974,15 @@
       btn.addEventListener('mouseup', release);
       btn.addEventListener('mouseleave', release);
     });
+    updateTouchVisibility();
+  }
+  // the d-pad bar shows on phones (or if Touch Controls is on) only during a live match
+  function updateTouchVisibility() {
+    const el = $('touch-controls'); if (!el) return;
+    el.classList.toggle('hidden', !((isPhone() || game.settings.touch) && game.screen === 'match'));
   }
   function showTouch(on) {
-    $('touch-controls').classList.toggle('hidden', !on);
-    game.settings.touch = on; saveStore();
+    game.settings.touch = on; saveStore(); updateTouchVisibility();
     const b = $('touch-toggle-btn'); if (b) b.textContent = 'Touch Controls: ' + (on ? 'ON' : 'OFF');
     const o = $('opt-touch'); if (o) o.textContent = on ? 'ON' : 'OFF';
   }
@@ -3289,9 +3298,9 @@
     ballShadow.scale.setScalar(0.6); scene.add(ballShadow);
     // indicator rings + chevron
     const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
-    const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9, depthWrite: false })); scene.add(activeRing);
+    const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
     const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
-    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(1.85, 1.85, 1); scene.add(chevron);
+    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(2.6, 2.6, 1); scene.add(chevron);   // bright marker over YOUR player
     // aim guide — line on the pitch + a target ring (mirrors the 2D shoot/pass hints)
     const aimGeo = new T.BufferGeometry(); aimGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(6), 3));
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
@@ -3329,7 +3338,11 @@
     // indicators (mirror the 2D colour language)
     const aId = (!game._allAI) ? game.activeId : null;
     const ap = aId ? playerById(aId) : null;
-    if (ap && ap.side === 'home' && !ap.isGK) { r.activeRing.visible = true; r.activeRing.position.set(ap.x - 44, 0.05, ap.y - 52.5); r.chevron.visible = true; r.chevron.position.set(ap.x - 44, 2.5, ap.y - 52.5); }
+    if (ap && ap.side === 'home' && !ap.isGK) {
+      r.activeRing.visible = true; r.activeRing.position.set(ap.x - 44, 0.05, ap.y - 52.5);
+      const cp = 2.6 + 0.55 * Math.sin(performance.now() / 220);    // gentle pulse so YOUR player is unmistakable
+      r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(ap.x - 44, 3.1, ap.y - 52.5);
+    }
     else { r.activeRing.visible = false; r.chevron.visible = false; }
     const owner = playerById(b.owner);
     if (owner && !owner.isGK) { r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5); const cc = (aId === owner.id) ? '#58d6ff' : (owner.side === 'home' ? '#3ef08f' : '#ff7a45'); r.carrierRing.material.color.set(cc); }
@@ -3487,14 +3500,17 @@
     // obvious who has the ball vs. who you merely control.
     if (isActive || hasBall) {
       ctx.save();
-      const ringC = hasBall ? (isActive ? '#58d6ff' : (p.side === 'home' ? '#3ef08f' : '#ff7a45')) : '#58d6ff';
-      if (hasBall) {
-        ctx.fillStyle = hexA(ringC, 0.2);
-        ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.32, bodyR*0.72, 0, 0, 6.2832); ctx.fill();
-      }
-      ctx.strokeStyle = ringC; ctx.lineWidth = hasBall ? 3.2 : 2.2;
-      ctx.shadowColor = ringC; ctx.shadowBlur = hasBall ? 14 : 9;
+      const ringC = isActive ? '#58d6ff' : (p.side === 'home' ? '#3ef08f' : '#ff7a45');   // YOUR player is ALWAYS cyan (offense / with ball / defence)
+      ctx.fillStyle = hexA(ringC, isActive ? 0.24 : 0.2);
+      ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.32, bodyR*0.72, 0, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = ringC; ctx.lineWidth = isActive ? 3.4 : (hasBall ? 3.0 : 2.2);
+      ctx.shadowColor = ringC; ctx.shadowBlur = isActive ? 15 : (hasBall ? 13 : 9);
       ctx.beginPath(); ctx.ellipse(sx, sy + bodyR*0.55, bodyR*1.25, bodyR*0.66, 0, 0, 6.2832); ctx.stroke();
+      if (isActive) {                          // a clear pointer above the player you control
+        const py = sy - bodyR * 1.45;
+        ctx.fillStyle = '#58d6ff'; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.moveTo(sx, py + bodyR * 0.55); ctx.lineTo(sx - bodyR * 0.45, py - bodyR * 0.15); ctx.lineTo(sx + bodyR * 0.45, py - bodyR * 0.15); ctx.closePath(); ctx.fill();
+      }
       ctx.restore();
     }
 

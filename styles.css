@@ -590,25 +590,32 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
 /* ============================================================
    TOUCH CONTROLS (fallback / preview)
    ============================================================ */
-.touch-controls { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+/* fixed control bar pinned to the BOTTOM of the viewport (below the pitch on phones) */
+.touch-controls { position: fixed; left: 0; right: 0; bottom: 0; height: 172px; pointer-events: none; z-index: 60; }
 .touch-dpad {
-  position: absolute; left: 14px; bottom: 14px;
-  width: 150px; height: 150px;
+  position: absolute; left: 20px; bottom: max(16px, env(safe-area-inset-bottom));
+  width: 174px; height: 174px;
 }
 .touch-btn {
   position: absolute; pointer-events: auto;
-  background: rgba(18, 32, 25, 0.55); border: 1.5px solid rgba(62,240,143,0.4);
-  color: var(--ink); border-radius: 12px; font-size: 22px;
-  width: 50px; height: 50px; cursor: pointer;
+  background: rgba(10, 22, 17, 0.82); border: 2px solid rgba(62,240,143,0.6);
+  color: var(--ink); border-radius: 14px; font-size: 26px;
+  width: 58px; height: 58px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent; touch-action: none;
 }
-.touch-btn:active { background: rgba(62,240,143,0.35); }
-.touch-up    { left: 50px; top: 0; }
-.touch-left  { left: 0; top: 50px; }
-.touch-right { left: 100px; top: 50px; }
-.touch-down  { left: 50px; top: 100px; }
+.touch-btn:active { background: rgba(62,240,143,0.45); transform: scale(0.94); }
+.touch-up    { left: 58px; top: 0; }
+.touch-left  { left: 0; top: 58px; }
+.touch-right { left: 116px; top: 58px; }
+.touch-down  { left: 58px; top: 116px; }
 .touch-pinch {
-  right: 22px; bottom: 40px; left: auto; top: auto;
-  width: 84px; height: 84px; border-radius: 50%;
-  font-size: 30px; color: var(--cyn); border-color: rgba(88,214,255,0.5);
-  position: absolute;
+  position: absolute; right: 26px; left: auto; top: auto;
+  bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
+  width: 96px; height: 96px; border-radius: 50%;
+  font-size: 36px; color: var(--cyn); border-color: rgba(88,214,255,0.75);
+  background: rgba(8, 22, 28, 0.85);
 }
+.touch-pinch:active { background: rgba(88,214,255,0.4); transform: scale(0.94); }
+/* phone: top-align the pitch so the bottom control bar sits below it (not over the play area) */
+body.is-phone { align-items: flex-start; padding-top: max(6px, env(safe-area-inset-top)); }

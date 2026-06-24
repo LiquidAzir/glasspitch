@@ -1492,8 +1492,8 @@
       }
     } else if (steering) {
       dx = game.steer.x; dy = game.steer.y;
-    } else if (game.settings.chase === 'On') {
-      // auto-seek the ball (intercept its near-future position)
+    } else if (game.settings.chase === 'On' || (game._recvUntil && now < game._recvUntil)) {
+      // auto-seek the ball (auto-chase on, OR you just received a pass → run onto it)
       const tgtx = b.x + b.vx * 0.18, tgty = b.y + b.vy * 0.18;
       dx = tgtx - p.x; dy = tgty - p.y;
     } else {
@@ -1757,6 +1757,7 @@
       kickTo(p, mate.x + mate.vx * 0.30, mate.y + mate.vy * 0.30, false, 0.97);
     }
     setActive(mate.id, true);
+    game._recvUntil = performance.now() / 1000 + 1.5;   // the receiver runs onto the pass (so it connects + control stays on them)
     if (game.tutorial) game.tutorial.passed = true;
   }
   function kickLob(p, tx, ty, skill) {
@@ -3344,12 +3345,15 @@
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
     const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
     const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(2.6, 2.6, 1); scene.add(chevron);   // bright marker over YOUR player
+    // a tall glowing beam so the player YOU control is unmistakable anywhere on the pitch
+    const beamGeo = new T.CylinderGeometry(0.30, 0.30, 9, 10, 1, true); beamGeo.translate(0, 4.4, 0);
+    const beam = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color: 0x6fe0ff, transparent: true, opacity: 0.55, depthWrite: false, blending: T.AdditiveBlending, side: T.DoubleSide })); scene.add(beam);
     // aim guide — line on the pitch + a target ring (mirrors the 2D shoot/pass hints)
     const aimGeo = new T.BufferGeometry(); aimGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(6), 3));
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
     const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
-    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
+    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
     applyCam();        // pose the camera from the selected Side/Behind preset
     refresh3DKits();
   }
@@ -3381,12 +3385,15 @@
     // indicators (mirror the 2D colour language)
     const aId = (!game._allAI) ? game.activeId : null;
     const ap = aId ? playerById(aId) : null;
-    if (ap && ap.side === 'home' && !ap.isGK) {
-      r.activeRing.visible = true; r.activeRing.position.set(ap.x - 44, 0.05, ap.y - 52.5);
+    if (ap && ap.side === 'home') {                  // ALWAYS mark the player you control (incl. the keeper)
+      const wx2 = ap.x - 44, wz2 = ap.y - 52.5;
+      r.activeRing.visible = true; r.activeRing.position.set(wx2, 0.05, wz2);
       const cp = 2.6 + 0.55 * Math.sin(performance.now() / 220);    // gentle pulse so YOUR player is unmistakable
-      r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(ap.x - 44, 3.1, ap.y - 52.5);
+      r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(wx2, 3.1, wz2);
+      r.beam.visible = true; r.beam.position.set(wx2, 0, wz2);
+      r.beam.material.opacity = 0.5 + 0.18 * (0.5 + 0.5 * Math.sin(performance.now() / 220));
     }
-    else { r.activeRing.visible = false; r.chevron.visible = false; }
+    else { r.activeRing.visible = false; r.chevron.visible = false; r.beam.visible = false; }
     const owner = playerById(b.owner);
     if (owner && !owner.isGK) { r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5); const cc = (aId === owner.id) ? '#58d6ff' : (owner.side === 'home' ? '#3ef08f' : '#ff7a45'); r.carrierRing.material.color.set(cc); }
     else r.carrierRing.visible = false;

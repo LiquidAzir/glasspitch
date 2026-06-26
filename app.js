@@ -3672,19 +3672,16 @@
       [head, torso, shorts, legs, arms, blob].forEach(m => { m.frustumCulled = false; m.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(m); });
       sides[side] = { head, torso, shorts, legs, arms, blob, kitMat, shortsMat };
     });
-    // ball — a bit bigger, self-lit, with a soft warm glow (no ring): easy to spot, still realistic
-    const ball = new T.Mesh(new T.SphereGeometry(0.44, 18, 14), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 1.0, roughness: 0.5, metalness: 0 }));
+    // ball — a bit bigger and self-lit; no glow halo, just a clean bright sphere (realistic)
+    const ball = new T.Mesh(new T.SphereGeometry(0.52, 18, 14), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 1.0, roughness: 0.5, metalness: 0 }));
     // a thin dark contour so the ball keeps a defined edge against bright lines on a regular screen
     // (harmless on the additive glasses display, where dark = transparent)
-    const ballOutline = new T.Mesh(new T.SphereGeometry(0.44 * 1.3, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
+    const ballOutline = new T.Mesh(new T.SphereGeometry(0.52 * 1.26, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
     ball.add(ballOutline);   // parented → follows the ball automatically
     scene.add(ball);
-    // soft glow halo (additive radial gradient — a gentle bloom, never a hard circle)
-    const halo = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, BALL_GLOW), transparent: true, blending: T.AdditiveBlending, depthWrite: false }));
-    scene.add(halo);
-    [ball, ballOutline, halo].forEach(m => { m.frustumCulled = false; });
+    [ball, ballOutline].forEach(m => { m.frustumCulled = false; });
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
-    ballShadow.scale.setScalar(0.72); scene.add(ballShadow);
+    ballShadow.scale.setScalar(0.8); scene.add(ballShadow);
     // indicator rings + chevron
     const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
@@ -3698,7 +3695,7 @@
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
     const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
-    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), part: new T.Object3D(), m4: new T.Matrix4(), ready: true };
+    R3D = { T, renderer, scene, camera, ground, tex, ball, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), part: new T.Object3D(), m4: new T.Matrix4(), ready: true };
     applyCam();        // pose the camera from the selected Side/Behind preset
     refresh3DKits();
   }
@@ -3750,12 +3747,8 @@
   function render3D() {
     const r = R3D, b = game.ball;
     syncSide3D('home'); syncSide3D('away');
-    const bz = 0.44 + (b.z || 0);
+    const bz = 0.52 + (b.z || 0);
     r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
-    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 240);
-    const camDist = r.camera.position.distanceTo(r.ball.position);
-    // a soft glow that hugs the ball — lightly distance-compensated so it stays easy to spot near or far, but always a gentle bloom (no ring)
-    r.halo.position.set(b.x - 44, bz, b.y - 52.5); r.halo.scale.setScalar(clamp(camDist * 0.03, 2.2, 4.4) * (1 + 0.07 * pulse));
     r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
     // indicators (mirror the 2D colour language)
     const aId = (!game._allAI) ? game.activeId : null;

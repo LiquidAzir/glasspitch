@@ -352,6 +352,8 @@
     else if (id === 'cup') renderCup();
     else if (id === 'league') renderLeague();
     else if (id === 'career') renderCareer();
+    else if (id === 'career-news') renderCareerNews();
+    else if (id === 'career-transfers') renderTransfers();
     else if (id === 'shootout') { drawPen(); penInstr(); }
     else if (id === 'setpiece') { drawSetPiece(); spInstr(); }
     else if (id === 'lineups') renderLineups();
@@ -382,9 +384,31 @@
       if (s.record) Object.assign(game.record, s.record);
       if (s.lastTeams) { game.ts.you = s.lastTeams.you; game.ts.opp = s.lastTeams.opp; }
       if (s.cup && s.cup.rounds) game.cup = s.cup;
-      if (s.league && s.league.fixtures) game.league = s.league;
-      if (s.career && s.career.cur) game.career = s.career;
+      if (s.league && s.league.fixtures) { game.league = s.league; migrateLeague(game.league); }
+      if (s.career && s.career.cur) { game.career = s.career; migrateCareer(game.career); }
     } catch (e) {}
+  }
+  // backfill fields added in the seasons-expansion so pre-update saves don't crash
+  function migrateLeague(lg) {
+    if (!lg) return;
+    if (!lg.scorers) lg.scorers = {};
+    if (!lg.rosters) { const r = {}; TEAMS.forEach(t => r[t.id] = genRoster(t.id)); lg.rosters = r; }
+    if (!lg.tab) lg.tab = 'table';
+    if (!lg.objective && lg.teams) lg.objective = seasonObjective(lg.you, lg.teams);
+    if (!lg.cup && lg.teams) lg.cup = buildSeasonCup(lg.teams, lg.you);
+    if (lg.outcome === undefined) lg.outcome = null;
+  }
+  function migrateCareer(c) {
+    if (!c) return;
+    if (!c.boosts) c.boosts = { ATT:0, MID:0, DEF:0, PAC:0, GK:0 };
+    if (!c.tenure) c.tenure = 1;
+    if (!c.awards) c.awards = [];
+    if (c.news === undefined) c.news = null;
+    if (!c.seasonScorers) c.seasonScorers = {};
+    if (c.cur) {
+      if (!c.cur.cup && c.cur.teams) c.cur.cup = buildSeasonCup(c.cur.teams, c.team);
+      if (!c.objective && c.cur.teams) c.objective = seasonObjective(c.team, c.cur.teams);
+    }
   }
   function saveStore() {
     try {
@@ -440,6 +464,7 @@
       game.phase = (snap.phase === 'goal' || snap.phase === 'restart') ? 'play' : (snap.phase || 'play');
       game.phaseT = 0;
       game.matchMode = snap.matchMode || 'friendly'; game.kickoffTeam = snap.kickoffTeam || 'away';
+      applyCareerBoostsToMatch();                    // re-apply transfer boosts to a resumed career match
       if (snap.watching || snap.allAI || snap.matchMode === 'watch') enterWatch();   // resume a saved spectator match as a spectator
       else { game.watching = false; game._allAI = false; }
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
@@ -453,7 +478,7 @@
       game.tutorial = null; game.dashCdUntil = 0; game.ticker = null;
       setupPitchGeom(); drawStaticPitch(); paintScoreboard();
       _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
-      game.history = [snap.matchMode === 'cup' ? 'cup' : snap.matchMode === 'league' ? 'league' : snap.matchMode === 'career' ? 'career' : 'title'];
+      game.history = [snap.matchMode === 'cup' ? 'cup' : (snap.matchMode === 'league' || snap.matchMode === 'leagueCup') ? 'league' : (snap.matchMode === 'career' || snap.matchMode === 'careerCup') ? 'career' : 'title'];
       return true;
     } catch (e) { return false; }
   }
@@ -477,7 +502,8 @@
       if (has) {
         const hc = teamById(snap.home.teamId).code, ac = teamById(snap.away.teamId).code;
         const mins = Math.min(90, Math.floor((snap.clockSec || 0) / 60));
-        const tag = (snap.matchMode && snap.matchMode !== 'friendly') ? snap.matchMode[0].toUpperCase() + snap.matchMode.slice(1) + ' · ' : '';
+        const modeLabel = { league:'League', career:'Career', cup:'Cup', leagueCup:'League Cup', careerCup:'Cup', watch:'Watch' }[snap.matchMode] || '';
+        const tag = modeLabel ? modeLabel + ' · ' : '';
         cont.textContent = `▶ Continue · ${tag}${hc} ${snap.home.score}–${snap.away.score} ${ac}  ${mins}'`;
       }
     }
@@ -545,12 +571,12 @@
   }
   function renderTeamSelect() {
     const ts = game.ts;
-    const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career';
+    const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career' || ts.mode === 'rehire';
     const watch = ts.mode === 'watch';
     const shoot = ts.mode === 'shootout';
-    $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
+    $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : ts.mode === 'rehire' ? 'Take a New Job' : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ts.mode === 'rehire' ? 'NEW JOB' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : ts.mode === 'rehire' ? 'Take the Job' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
     $('ts-random').classList.toggle('hidden', tour || watch || shoot || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
@@ -577,6 +603,7 @@
     if (ts.mode === 'cup') { ts.mode = null; startCup(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'league') { ts.mode = null; startLeague(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'career') { ts.mode = null; startCareer(TEAMS[ts.idx].id); return; }
+    if (ts.mode === 'rehire') { ts.mode = null; careerRehire(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'watch') {
       if (ts.step === 0) { ts.you = TEAMS[ts.idx].id; ts.step = 1; ts.idx = (ts.idx + 1) % TEAMS.length; renderTeamSelect(); }
       else { ts.mode = null; startWatchMatch(ts.you, TEAMS[ts.idx].id); }
@@ -776,12 +803,28 @@
     return { x, y };
   }
 
+  // career transfers: a boosted COPY of your club's ratings (never mutate the shared TEAMS constant)
+  function boostedDef(t, b) {
+    if (!b) return t;
+    return { ...t, r: { ATT: clamp(t.r.ATT+(b.ATT||0),1,99), MID: clamp(t.r.MID+(b.MID||0),1,99), DEF: clamp(t.r.DEF+(b.DEF||0),1,99), PAC: clamp(t.r.PAC+(b.PAC||0),1,99), GK: clamp(t.r.GK+(b.GK||0),1,99) } };
+  }
+  function applyCareerBoostsToMatch() {
+    if (game.matchMode !== 'career' && game.matchMode !== 'careerCup') return;
+    const c = game.career; if (!c || !c.boosts) return;
+    ['home','away'].forEach(s => {
+      const tm = game[s]; if (!tm || tm.teamId !== c.team) return;
+      tm.def = boostedDef(tm.def, c.boosts);
+      const sr = 0.85 + tm.def.r.PAC/100 * 0.32;
+      tm.players.forEach(p => p.speedR = sr); tm.bench.forEach(p => p.speedR = sr);   // PAC investment → quicker legs
+    });
+  }
   function startMatch(homeId, awayId, mode) {
     _seed = (Date.now() & 0x7fffffff) ^ 0x9e3779b9;
     game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
     game.home.mentality = game.settings.mentality || 'Balanced';   // your coaching choice carries in
+    applyCareerBoostsToMatch();                     // your transfer-market investment strengthens your XI
     assignKitColors();                              // away gets a change strip if the colours clash
     if (R3D && R3D.ready) refresh3DKits();          // recolour 3D models for the new teams
     game.ball = { x: CFG.PW/2, y: CFG.PL/2, z: 0, vx: 0, vy: 0, vz: 0, owner: null, shot: false, trail: [] };
@@ -1124,6 +1167,7 @@
     // substitution picks carry the player id in the action string
     if (action.indexOf('sub-off:') === 0) { game._subOff = action.slice(8); renderSubs(); return; }
     if (action.indexOf('sub-on:') === 0) { if (game._subOff) { doSub(game.home, game._subOff, action.slice(7)); game._subOff = null; renderSubs(); } return; }
+    if (action.indexOf('ct-buy:') === 0) { careerBuy(action.slice(7)); return; }
     switch (action) {
       case 'resume-saved': { const snap = loadMatchSnap(); if (snap && restoreMatch(snap)) navigateTo('match', { addToHistory:false }); else { clearMatch(); renderTitle(); } break; }
       case 'quick-match': {
@@ -1138,13 +1182,26 @@
       case 'cup-new': startNewCupFlow(); break;
       case 'goto-league': if (game.league) navigateTo('league'); else startNewLeagueFlow(); break;
       case 'league-play': leaguePlay(); break;
+      case 'league-cup-play': leagueCupPlay(); break;
+      case 'league-tab-table': game.league.tab = 'table'; renderLeague(); break;
+      case 'league-tab-fixtures': game.league.tab = 'fixtures'; renderLeague(); break;
+      case 'league-tab-cup': game.league.tab = 'cup'; renderLeague(); break;
       case 'league-new': startNewLeagueFlow(); break;
       case 'goto-career': if (game.career) navigateTo('career'); else startNewCareerFlow(); break;
       case 'career-play': careerAdvance(); break;
+      case 'career-cup-play': careerCupPlay(); break;
       case 'career-new': startNewCareerFlow(); break;
       case 'career-tab-table': game.career.tab = 'table'; renderCareer(); break;
+      case 'career-tab-fixtures': game.career.tab = 'fixtures'; renderCareer(); break;
+      case 'career-tab-cup': game.career.tab = 'cup'; renderCareer(); break;
       case 'career-tab-scorers': game.career.tab = 'scorers'; renderCareer(); break;
       case 'career-tab-history': game.career.tab = 'history'; renderCareer(); break;
+      case 'cn-continue': careerNewsContinue(); break;
+      case 'cn-accept-poach': careerAcceptPoach(); break;
+      case 'cn-decline-poach': careerDeclinePoach(); break;
+      case 'cn-rehire': startRehireFlow(); break;
+      case 'cn-retire': careerRetire(); break;
+      case 'ct-begin': beginNextSeason(); break;
       case 'goto-watch': startWatchFlow(); break;
       case 'goto-shootout': startShootoutFlow(); break;
       case 'watch-toggle':                                         // menu toggle: hand off to the AI, or take control back
@@ -1199,7 +1256,7 @@
       case 'toggle-chase': toggleChase(); break;
       case 'cycle-weather': cycleWeather(); break;
       case 'resume-second': startSecondHalf(); break;
-      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league') game.history = ['league']; else if (m === 'career') game.history = ['career']; break; }
+      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
       case 'quit-title': exitWatch(false); saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
     }
@@ -2087,10 +2144,12 @@
     const scorer = playerById(game.lastTouchPlayer);
     const ownGoal = scorer && scorer.side !== side;
     if (scorer && !ownGoal) scorer.mGoals = (scorer.mGoals || 0) + 1;   // Man of the Match
-    if (game.matchMode === 'career' && game.career && scorer && !ownGoal) {
+    const seasonMap = (game.matchMode === 'career' && game.career) ? game.career.seasonScorers
+                    : (game.matchMode === 'league' && game.league) ? game.league.scorers : null;
+    if (seasonMap && scorer && !ownGoal) {
       const tid = side === 'home' ? game.home.teamId : game.away.teamId;
       const key = tid + '#' + scorer.num;
-      game.career.seasonScorers[key] = (game.career.seasonScorers[key] || 0) + 1;
+      seasonMap[key] = (seasonMap[key] || 0) + 1;
     }
     showBanner(ownGoal ? 'OWN GOAL' : 'GOAL!');
     goalCommentary(side, scorer, ownGoal);
@@ -2217,6 +2276,7 @@
     game.motm = computeMOTM();
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
+    if (game.matchMode === 'leagueCup' || game.matchMode === 'careerCup') { onSeasonCupMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
     if (game.matchMode === 'career') { onCareerMatchEnd(); return; }
     if (!wasWatch) {                               // a spectated friendly doesn't touch your record
@@ -2264,10 +2324,15 @@
     navigateTo('cup', { addToHistory: false }); game.history = ['title'];
     renderCup('Quarter-finals — good luck!');
   }
-  function cupOpponent() {
-    const c = game.cup, teams = c.rounds[c.round], yi = teams.indexOf(c.you);
+  function cupOpponentC(c) {
+    const teams = c.rounds[c.round], yi = teams.indexOf(c.you);
     if (yi < 0) return null;
     return teams[yi % 2 === 0 ? yi + 1 : yi - 1];
+  }
+  function cupOpponent() { return cupOpponentC(game.cup); }
+  // a parallel knockout for a season: same 8 clubs as the league, drawn fresh
+  function buildSeasonCup(teamIds, youId) {
+    return { you: youId, rounds: [shuffle(teamIds.slice())], scores: [new Array(teamIds.length/2).fill(null)], round: 0, alive: true, champion: null };
   }
   function cupPlay() {
     const c = game.cup; if (!c || !c.alive || c.champion) return;
@@ -2281,12 +2346,12 @@
     if (hs === as) { startShootout(youId, oppId); return; }
     finishCupMatch(hs > as ? youId : oppId);
   }
-  function resolveCup(yourWinnerId) {
-    const c = game.cup, teams = c.rounds[c.round], n = teams.length;
+  function resolveCupC(c, yourWinnerId, yourScore) {
+    const teams = c.rounds[c.round], n = teams.length;
     const yi = teams.indexOf(c.you), yourPair = yi >= 0 ? (yi >> 1) : -1;
     const winners = [], scoreRow = [];
     for (let i = 0; i < n/2; i++) {
-      if (i === yourPair) { winners.push(yourWinnerId); scoreRow.push([game.home.score, game.away.score]); }
+      if (i === yourPair) { winners.push(yourWinnerId); scoreRow.push(yourScore || [game.home.score, game.away.score]); }
       else { const r = simWinner(teams[2*i], teams[2*i+1]); winners.push(r.winner); scoreRow.push(r.score); }
     }
     c.scores[c.round] = scoreRow;
@@ -2294,8 +2359,9 @@
     if (winners.length === 1) c.champion = winners[0];
     else { c.rounds.push(winners); c.scores.push(new Array(winners.length/2).fill(null)); c.round++; }
   }
-  function autoCompleteCup() {
-    const c = game.cup; let guard = 0;
+  function resolveCup(w) { resolveCupC(game.cup, w); }
+  function autoCompleteCupC(c) {
+    let guard = 0;
     while (!c.champion && guard++ < 8) {
       const teams = c.rounds[c.round], winners = [], scoreRow = [];
       for (let i = 0; i < teams.length/2; i++) { const r = simWinner(teams[2*i], teams[2*i+1]); winners.push(r.winner); scoreRow.push(r.score); }
@@ -2304,6 +2370,7 @@
       else { c.rounds.push(winners); c.scores.push(new Array(winners.length/2).fill(null)); c.round++; }
     }
   }
+  function autoCompleteCup() { autoCompleteCupC(game.cup); }
   function finishCupMatch(winnerId) {
     const c = game.cup;
     const youWon = winnerId === c.you;
@@ -2319,10 +2386,7 @@
     renderCup(msg);
   }
 
-  function renderCup(status) {
-    const c = game.cup; if (!c) return;
-    $('cup-round').textContent = c.champion ? 'Complete' : roundName(c.rounds[c.round].length);
-    const host = $('cup-bracket');
+  function cupBracketHTML(c) {
     const titles = { 8: 'QF', 4: 'SF', 2: 'F' };
     let html = '';
     for (let r = 0; r < c.rounds.length; r++) {
@@ -2344,7 +2408,12 @@
       html += `</div>`;
     }
     if (c.champion) html += `<div class="cup-col"><div class="cup-col-title">CUP</div><div class="cup-champion"><div class="trophy">🏆</div><span class="champ-code" style="color:${teamById(c.champion).col}">${teamById(c.champion).code}</span></div></div>`;
-    host.innerHTML = html;
+    return html;
+  }
+  function renderCup(status) {
+    const c = game.cup; if (!c) return;
+    $('cup-round').textContent = c.champion ? 'Complete' : roundName(c.rounds[c.round].length);
+    $('cup-bracket').innerHTML = cupBracketHTML(c);
     if (status != null) $('cup-status').textContent = status;
     const cp = $('cup-play'), cw = $('cup-watch');
     const done = c.champion || !c.alive;
@@ -2355,8 +2424,10 @@
 
   // ----- penalty shootout -----
   const PEN_ZONES = 3;
-  function startShootout(youId, oppId, standalone) {
-    game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [], _standalone: !!standalone };
+  function startShootout(youId, oppId, ctx) {
+    // ctx: true/'standalone' = menu shootout, 'leagueCup'/'careerCup' = season cup tie, else the standalone Cup
+    const c2 = (ctx === true || ctx === 'standalone') ? 'standalone' : (ctx === 'leagueCup' || ctx === 'careerCup') ? ctx : 'cup';
+    game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [], _standalone: c2 === 'standalone', _ctx: c2 };
     navigateTo('shootout', { addToHistory: false });
     game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't auto-advance the aim
     SFX.whistle();
@@ -2414,9 +2485,14 @@
     const c = game.penalty; c.phase = 'done'; c.winner = side;
     drawPen(); penInstr();
     SFX.whistle(); if (side === 'home') SFX.goal();
-    if (c._standalone) { if (game._penFast) navigateTo('title'); else setTimeout(() => navigateTo('title'), 1900); return; }   // menu shootout → back to title
+    const ctx = c._ctx || (c._standalone ? 'standalone' : 'cup');
+    if (ctx === 'standalone') { if (game._penFast) navigateTo('title'); else setTimeout(() => navigateTo('title'), 1900); return; }   // menu shootout → back to title
     const winnerId = side === 'home' ? c.you : c.opp;
-    if (game._penFast) finishCupMatch(winnerId); else setTimeout(() => { finishCupMatch(winnerId); }, 1700);
+    let fn;
+    if (ctx === 'leagueCup') fn = () => finishSeasonCupMatch(game.league.cup, winnerId, true);
+    else if (ctx === 'careerCup') fn = () => finishSeasonCupMatch(game.career.cur.cup, winnerId, false);
+    else fn = () => finishCupMatch(winnerId);
+    if (game._penFast) fn(); else setTimeout(fn, 1700);
   }
   function penInstr() {
     const c = game.penalty; if (!c) return;
@@ -2674,6 +2750,81 @@
     }
     return rounds;
   }
+  // home-and-away: each pair meets twice — the second leg swaps home/away (pairs are [home, away])
+  function doubleRoundRobin(ids) {
+    const first = roundRobin(ids);
+    const second = first.map(rd => rd.map(pair => [pair[1], pair[0]]));
+    return first.concat(second);
+  }
+  // ----- board expectations + form (manager depth, shared by League + Career) -----
+  // a club's pre-season target, set by where its strength ranks in the field
+  function seasonObjective(youId, teamIds) {
+    const ranked = teamIds.slice().sort((a, b) => strengthOf(b) - strengthOf(a));
+    const r = ranked.indexOf(youId), N = teamIds.length;
+    if (r === 0)      return { kind:'win',      label:'Win the league',            targetPos:1 };
+    if (r <= 2)       return { kind:'top3',     label:'Finish in the top 3',       targetPos:3 };
+    if (r < N/2)      return { kind:'tophalf',  label:'Finish in the top half',    targetPos:Math.floor(N/2) };
+    if (r >= N-2)     return { kind:'survive',  label:'Stay out of the bottom two', targetPos:N-2 };
+    return              { kind:'midtable', label:'Reach mid-table or better', targetPos:Math.ceil(N*0.55) };
+  }
+  // grade a finishing position against the objective → tier: exceeded | met | missed | failed
+  function objectiveVerdict(obj, pos, N) {
+    if (!obj) return { met:true, tier:'met' };
+    const delta = obj.targetPos - pos;                 // > 0 = better than the target
+    if (pos === 1 && obj.kind !== 'win') return { met:true, tier:'exceeded' };
+    if (delta >= 2) return { met:true, tier:'exceeded' };
+    if (delta >= 0) return { met:true, tier:'met' };
+    if (delta === -1) return { met:false, tier:'missed' };
+    if (delta === -2 && pos < N) return { met:false, tier:'missed' };
+    return { met:false, tier:'failed' };               // 3+ short, or dead last
+  }
+  const VERDICT_TEXT = { exceeded:'Expectations smashed!', met:'Objective met.', missed:'Fell just short.', failed:'A season to forget.' };
+  // your last-N league results as 'W'/'D'/'L', oldest → newest
+  function seasonForm(fixtures, results, youId, lastN) {
+    const out = [];
+    for (let r = 0; r < fixtures.length; r++) {
+      const rd = fixtures[r];
+      for (let i = 0; i < rd.length; i++) {
+        if (rd[i][0] !== youId && rd[i][1] !== youId) continue;
+        const sc = results[r] && results[r][i]; if (!sc) continue;
+        const meHome = rd[i][0] === youId, mine = meHome ? sc[0] : sc[1], theirs = meHome ? sc[1] : sc[0];
+        out.push(mine > theirs ? 'W' : mine < theirs ? 'L' : 'D');
+      }
+    }
+    return lastN ? out.slice(-lastN) : out;
+  }
+  function formHTML(form) {
+    if (!form.length) return '<span class="form-chip form-none">—</span>';
+    return form.map(r => `<span class="form-chip form-${r}">${r}</span>`).join('');
+  }
+  // a season's full schedule for YOUR club (matchday list with H/A + result)
+  function fixturesHTML(fixtures, results, youId, curRound) {
+    let h = '';
+    for (let r = 0; r < fixtures.length; r++) {
+      const rd = fixtures[r];
+      let f = -1; for (let i = 0; i < rd.length; i++) if (rd[i][0] === youId || rd[i][1] === youId) { f = i; break; }
+      if (f < 0) continue;
+      const meHome = rd[f][0] === youId, oppId = meHome ? rd[f][1] : rd[f][0];
+      const sc = results[r] && results[r][f];
+      const next = (r === curRound) ? ' fx-next' : '';
+      let res = '<span class="fx-res fx-up">–</span>';
+      if (sc) {
+        const mine = meHome ? sc[0] : sc[1], theirs = meHome ? sc[1] : sc[0];
+        const o = mine > theirs ? 'W' : mine < theirs ? 'L' : 'D';
+        res = `<span class="fx-res form-${o}">${mine}–${theirs}</span>`;
+      }
+      h += `<div class="fx-row${next}"><span class="fx-md">MD${r+1}</span><span class="fx-ha">${meHome?'H':'A'}</span>`
+        + `<span class="fx-opp"><span class="ct-dot" style="background:${teamById(oppId).col}"></span>${teamById(oppId).code}</span>${res}</div>`;
+    }
+    return h;
+  }
+  // season scorer maps: 'teamId#num' -> goals. Used for the Golden Boot + your top scorer.
+  function topScorers(map, n) {
+    const arr = [];
+    for (const key in map) { const p = key.split('#'); arr.push({ teamId:p[0], num:+p[1], goals:map[key] }); }
+    arr.sort((a, b) => b.goals - a.goals || (a.teamId < b.teamId ? -1 : a.teamId > b.teamId ? 1 : a.num - b.num));
+    return n ? arr.slice(0, n) : arr;
+  }
   function startNewLeagueFlow() {
     game.ts.mode = 'league'; game.ts.step = 0;
     game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
@@ -2682,11 +2833,13 @@
   function startLeague(youId) {
     _seed = (Date.now() & 0x7fffffff) ^ 0x2545f491;
     const ids = shuffle(TEAMS.map(t => t.id));
-    const fixtures = roundRobin(ids);
-    game.league = { you: youId, teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false, champion: null };
+    const fixtures = doubleRoundRobin(ids);                       // home & away — face every club twice
+    const rosters = {}; TEAMS.forEach(t => rosters[t.id] = genRoster(t.id));
+    game.league = { you: youId, teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false, champion: null,
+      scorers: {}, rosters, cup: buildSeasonCup(ids, youId), objective: seasonObjective(youId, ids), tab: 'table', outcome: null };
     game.ts.you = youId; saveStore();
     navigateTo('league', { addToHistory: false }); game.history = ['title'];
-    renderLeague('Matchday 1 — kick off your season!');
+    renderLeague(`Matchday 1 — the board want you to ${game.league.objective.label.toLowerCase()}.`);
   }
   function leagueFixtureForYou() {
     const lg = game.league, rd = lg.fixtures[lg.round];
@@ -2708,13 +2861,14 @@
     const rd = lg.fixtures[lg.round], fin = game.ticker && game.ticker.finals;
     for (let i = 0; i < rd.length; i++) {
       if (i === f.idx || lg.results[lg.round][i]) continue;
-      lg.results[lg.round][i] = (fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;   // use the scores the ticker showed
+      const sc = (fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;   // use the scores the ticker showed
+      lg.results[lg.round][i] = sc;
+      distributeGoals(rd[i][0], sc[0], lg.scorers); distributeGoals(rd[i][1], sc[1], lg.scorers);
     }
     game.ticker = null;
     let msg;
     if (lg.round >= lg.fixtures.length - 1) {
-      lg.done = true; lg.champion = leagueTable()[0].id;
-      msg = lg.champion === lg.you ? '🏆 Champions! You won the League!' : `${teamById(lg.champion).name} won the League.`;
+      finishLeagueSeason(); msg = lg.outcome.msg;
     } else {
       lg.round++;
       const w = youScore > oppScore, d = youScore === oppScore;
@@ -2723,6 +2877,54 @@
     saveStore();
     navigateTo('league', { addToHistory: false }); game.history = ['title'];
     renderLeague(msg + (game.motm ? '  ' + motmLine() : ''));
+  }
+  function finishLeagueSeason() {
+    const lg = game.league; lg.done = true;
+    const table = leagueTable(); lg.champion = table[0].id;
+    if (lg.cup && lg.cup.alive && !lg.cup.champion) autoCompleteCupC(lg.cup);   // wrap up any unplayed cup ties
+    const pos = table.findIndex(t => t.id === lg.you) + 1;
+    const verdict = objectiveVerdict(lg.objective, pos, lg.teams.length);
+    const boot = topScorers(lg.scorers, 1)[0] || null;
+    lg.outcome = { pos, verdict, champion: lg.champion, cupChampion: lg.cup ? lg.cup.champion : null, boot };
+    let msg = lg.champion === lg.you ? '🏆 Champions — you won the League!' : `Season over · ${teamById(lg.champion).code} took the title.`;
+    if (lg.cup && lg.cup.champion === lg.you) msg += (lg.champion === lg.you ? '  And the Cup — a DOUBLE! 🏆🏆' : '  But you lifted the Cup! 🏆');
+    lg.outcome.msg = `${msg}  You finished ${ordinal(pos)} — ${VERDICT_TEXT[verdict.tier]}`;
+  }
+  // ----- parallel season cup (League "double" + Career cup) -----
+  function leagueCupPlay() {
+    const lg = game.league, c = lg && lg.cup; if (!c || !c.alive || c.champion) return;
+    const opp = cupOpponentC(c); if (!opp) return;
+    startMatch(lg.you, opp, 'leagueCup'); game.history = ['league'];
+  }
+  function careerCupPlay() {
+    const cr = game.career, c = cr && cr.cur && cr.cur.cup; if (!c || !c.alive || c.champion) return;
+    const opp = cupOpponentC(c); if (!opp) return;
+    startMatch(cr.team, opp, 'careerCup'); game.history = ['career'];
+  }
+  function onSeasonCupMatchEnd() {
+    const isLeague = game.matchMode === 'leagueCup';
+    const c = isLeague ? game.league.cup : game.career.cur.cup;
+    const hs = game.home.score, as = game.away.score;
+    const youId = game.home.teamId, oppId = game.away.teamId;
+    if (hs === as) { startShootout(youId, oppId, game.matchMode); return; }   // level tie → shootout
+    finishSeasonCupMatch(c, hs > as ? youId : oppId, isLeague);
+  }
+  function finishSeasonCupMatch(c, winnerId, isLeague) {
+    const youWon = winnerId === c.you;
+    resolveCupC(c, winnerId);
+    if (!c.alive && !c.champion) autoCompleteCupC(c);
+    if (!isLeague && c.champion === c.you && game.career) {     // a cup win is a trophy in Career
+      if (!game.career.trophies.some(t => t.season === game.career.season && t.title === 'Cup'))
+        game.career.trophies.push({ season: game.career.season, title: 'Cup' });
+    }
+    saveStore();
+    let msg;
+    if (c.champion === c.you) msg = '🏆 You won the Cup!';
+    else if (c.champion) msg = `${teamById(c.champion).code} won the Cup.`;
+    else if (!c.alive) msg = 'Knocked out of the Cup. The league is your focus now.';
+    else msg = youWon ? `Into the ${roundName(c.rounds[c.round].length)} of the Cup!` : '';
+    navigateTo(isLeague ? 'league' : 'career', { addToHistory: false }); game.history = ['title'];
+    if (isLeague) { game.league.tab = 'cup'; renderLeague(msg); } else { game.career.tab = 'cup'; renderCareer(msg); }
   }
   function computeTable(lg) {
     const row = {};
@@ -2741,27 +2943,48 @@
     return arr;
   }
   function leagueTable() { return computeTable(game.league); }
-  function renderLeague(status) {
-    const lg = game.league; if (!lg) return;
-    $('league-round').textContent = lg.done ? 'Season complete' : `Matchday ${lg.round + 1} / ${lg.fixtures.length}`;
-    const table = leagueTable();
+  function standingsHTML(seasonObj, youId, done) {
+    const table = computeTable(seasonObj);
     let html = `<div class="lg-row lg-head"><span class="lg-pos">#</span><span class="lg-team">Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span class="lg-pts">Pts</span></div>`;
     table.forEach((t, i) => {
-      const you = t.id === lg.you ? ' you-row' : '';
-      const champ = lg.done && i === 0 ? ' lg-champ' : '';
+      const you = t.id === youId ? ' you-row' : '';
+      const champ = done && i === 0 ? ' lg-champ' : '';
       html += `<div class="lg-row${you}${champ}"><span class="lg-pos">${i+1}</span><span class="lg-team"><span class="ct-dot" style="background:${teamById(t.id).col};color:${teamById(t.id).col}"></span>${teamById(t.id).code}</span><span>${t.P}</span><span>${t.W}</span><span>${t.D}</span><span>${t.L}</span><span>${t.GD>0?'+':''}${t.GD}</span><span class="lg-pts">${t.Pts}</span></div>`;
     });
-    $('league-table').innerHTML = html;
+    return html;
+  }
+  function rosterName(rosters, teamId, num) { return (rosters && rosters[teamId] && rosters[teamId][num]) || ('#' + num); }
+  function scorersListHTML(scorers, rosters, youId, n, head) {
+    const boot = topScorers(scorers || {}, n || 8);
+    if (!boot.length) return `<p class="cr-empty">No goals yet — play on to start the Golden Boot race.</p>`;
+    let h = `<div class="cr-boot-head">${head || '🥇 Top scorers'}</div>`;
+    boot.forEach((b, i) => {
+      const you = b.teamId === youId ? ' you-row' : '';
+      h += `<div class="cr-boot-row${you}"><span class="cr-rank">${i+1}</span><span class="cr-name">${rosterName(rosters, b.teamId, b.num)}</span><span class="cr-club"><span class="ct-dot" style="background:${teamById(b.teamId).col}"></span>${teamById(b.teamId).code}</span><span class="cr-goals">${b.goals}</span></div>`;
+    });
+    return h;
+  }
+  function renderLeague(status) {
+    const lg = game.league; if (!lg) return;
+    lg.tab = lg.tab || 'table';
+    $('league-round').textContent = lg.done ? 'Season complete' : `Matchday ${lg.round + 1} / ${lg.fixtures.length}`;
+    const oEl = $('league-obj'); if (oEl) oEl.innerHTML = lg.objective ? `🎯 ${lg.objective.label}` : '';
+    const fEl = $('league-form'); if (fEl) fEl.innerHTML = formHTML(seasonForm(lg.fixtures, lg.results, lg.you, 5));
+    ['table','fixtures','cup'].forEach(t => { const el = document.querySelector(`[data-action="league-tab-${t}"]`); if (el) el.classList.toggle('on', t === lg.tab); });
+    const host = $('league-content');
+    if (lg.tab === 'fixtures') host.innerHTML = `<div class="fx-list">${fixturesHTML(lg.fixtures, lg.results, lg.you, lg.round)}</div>`;
+    else if (lg.tab === 'cup') host.innerHTML = lg.cup ? `<div class="cup-bracket">${cupBracketHTML(lg.cup)}</div>` : '';
+    else host.innerHTML = `<div class="league-table">${standingsHTML(lg, lg.you, lg.done)}</div>` + `<div class="lg-scorers">${scorersListHTML(lg.scorers, lg.rosters, lg.you, 5)}</div>`;
     if (status != null) $('league-status').textContent = status;
-    const cp = $('league-play'), lw = $('league-watch');
-    if (lg.done) cp.classList.add('hidden');
-    else {
-      const f = leagueFixtureForYou();
-      const opp = f ? (f.pair[0] === lg.you ? f.pair[1] : f.pair[0]) : null;
-      cp.classList.remove('hidden');
-      cp.textContent = opp ? `Play Match · ${teamById(lg.you).code} v ${teamById(opp).code}` : 'Play Match';
-    }
-    if (lw) lw.classList.toggle('hidden', lg.done);
+    const cp = $('league-play'), lw = $('league-watch'), cpu = $('league-cup-play');
+    if (lg.done) { cp.classList.add('hidden'); if (lw) lw.classList.add('hidden'); if (cpu) cpu.classList.add('hidden'); return; }
+    const f = leagueFixtureForYou();
+    const opp = f ? (f.pair[0] === lg.you ? f.pair[1] : f.pair[0]) : null;
+    cp.classList.remove('hidden');
+    cp.textContent = opp ? `Play · ${teamById(lg.you).code} v ${teamById(opp).code}` : 'Play Match';
+    if (lw) lw.classList.remove('hidden');
+    const cup = lg.cup, cupOn = cup && cup.alive && !cup.champion;
+    if (cpu) { cpu.classList.toggle('hidden', !cupOn); if (cupOn) cpu.textContent = `🏆 ${roundName(cup.rounds[cup.round].length)} · v ${teamById(cupOpponentC(cup)).code}`; }
   }
 
   // ============================================================
@@ -2871,18 +3094,21 @@
   function startCareer(youId) {
     _seed = (Date.now() & 0x7fffffff) ^ 0x13371337;
     const rosters = {}; TEAMS.forEach(t => rosters[t.id] = genRoster(t.id));
-    game.career = { team: youId, season: 1, tab: 'table', trophies: [], history: [], bootHistory: [], rosters, cur: null, seasonScorers: {} };
+    game.career = { team: youId, season: 1, tab: 'table', trophies: [], history: [], bootHistory: [], rosters, cur: null, seasonScorers: {},
+      boosts: { ATT:0, MID:0, DEF:0, PAC:0, GK:0 }, tenure: 1, awards: [], news: null, objective: null };
     newCareerSeason();
     game.ts.you = youId; saveStore();
     navigateTo('career', { addToHistory: false }); game.history = ['title'];
-    renderCareer(`Season 1 — welcome to ${teamById(youId).name}!`);
+    renderCareer(`Season 1 at ${teamById(youId).name} — the board want you to ${game.career.objective.label.toLowerCase()}.`);
   }
   function newCareerSeason() {
     const c = game.career;
     const ids = shuffle(TEAMS.map(t => t.id));
-    const fixtures = roundRobin(ids);
-    c.cur = { teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false };
+    const fixtures = doubleRoundRobin(ids);                       // home & away
+    c.cur = { teams: ids, fixtures, results: fixtures.map(rd => rd.map(() => null)), round: 0, done: false, cup: buildSeasonCup(ids, c.team) };
     c.seasonScorers = {};
+    c.objective = seasonObjective(c.team, ids);
+    c.news = null;
   }
   function careerFixtureForYou() {
     const cur = game.career.cur, rd = cur.fixtures[cur.round];
@@ -2899,8 +3125,9 @@
   }
   function careerAdvance() {
     const c = game.career; if (!c) return;
-    if (c.cur.done) { c.season++; newCareerSeason(); saveStore(); renderCareer(`Season ${c.season} — a new campaign begins.`); }
-    else careerPlay();
+    if (!c.cur.done) { careerPlay(); return; }
+    if (c.news) { navigateTo('career-news'); renderCareerNews(); return; }   // season finished → review/board verdict
+    beginNextSeason();
   }
   function pickScorerNum() {
     const W = { 9:5, 7:3, 11:3, 10:3, 8:2, 4:1, 2:1, 3:1, 5:1, 6:1 };
@@ -2909,16 +3136,11 @@
     for (const k in W) { r -= W[k]; if (r <= 0) return +k; }
     return 9;
   }
-  function distributeGoals(teamId, n) {
-    const ss = game.career.seasonScorers;
-    for (let k = 0; k < n; k++) { const key = teamId + '#' + pickScorerNum(); ss[key] = (ss[key] || 0) + 1; }
+  function distributeGoals(teamId, n, map) {
+    if (!map) return;
+    for (let k = 0; k < n; k++) { const key = teamId + '#' + pickScorerNum(); map[key] = (map[key] || 0) + 1; }
   }
-  function bootTable() {
-    const ss = game.career.seasonScorers, arr = [];
-    for (const key in ss) { const p = key.split('#'); arr.push({ teamId: p[0], num: +p[1], goals: ss[key] }); }
-    arr.sort((a, b) => b.goals - a.goals || (a.teamId < b.teamId ? -1 : 1));
-    return arr;
-  }
+  function bootTable() { return topScorers(game.career.seasonScorers); }
   function onCareerMatchEnd() {
     const c = game.career, cur = c.cur, f = careerFixtureForYou();
     const ys = game.home.score, os = game.away.score;
@@ -2928,7 +3150,7 @@
       if (i === f.idx || cur.results[cur.round][i]) continue;
       const sc = (fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;   // use the scores the ticker showed
       cur.results[cur.round][i] = sc;
-      distributeGoals(rd[i][0], sc[0]); distributeGoals(rd[i][1], sc[1]);
+      distributeGoals(rd[i][0], sc[0], c.seasonScorers); distributeGoals(rd[i][1], sc[1], c.seasonScorers);
     }
     game.ticker = null;
     if (cur.round >= cur.fixtures.length - 1) { onCareerSeasonEnd(); return; }
@@ -2938,27 +3160,70 @@
     renderCareer((w ? 'Win! ' : d ? 'Draw. ' : 'Lost. ') + `Matchday ${cur.round + 1}.` + (game.motm ? '  ' + motmLine() : ''));
   }
   function onCareerSeasonEnd() {
-    const c = game.career, table = computeTable(c.cur);
+    const c = game.career, N = c.cur.teams.length;
+    if (c.cur.cup && c.cur.cup.alive && !c.cur.cup.champion) autoCompleteCupC(c.cur.cup);   // wrap up the cup
+    const table = computeTable(c.cur);
     c.cur.done = true;
     const pos = table.findIndex(t => t.id === c.team) + 1, me = table[pos-1];
     c.history.push({ season: c.season, pos, Pts: me.Pts, W: me.W, D: me.D, L: me.L, champion: table[0].id });
-    if (pos === 1) c.trophies.push({ season: c.season, title: 'League' });
-    const boot = bootTable();
-    if (boot[0]) c.bootHistory.push({ season: c.season, teamId: boot[0].teamId, num: boot[0].num, name: scorerName(boot[0].teamId, boot[0].num), goals: boot[0].goals });
+    if (pos === 1 && !c.trophies.some(t => t.season === c.season && t.title === 'League')) c.trophies.push({ season: c.season, title: 'League' });
+    if (c.cur.cup && c.cur.cup.champion === c.team && !c.trophies.some(t => t.season === c.season && t.title === 'Cup')) c.trophies.push({ season: c.season, title: 'Cup' });   // also bank a cup won by end-of-season auto-completion
+    const boot = bootTable()[0];
+    if (boot) c.bootHistory.push({ season: c.season, teamId: boot.teamId, num: boot.num, name: scorerName(boot.teamId, boot.num), goals: boot.goals });
+    const verdict = objectiveVerdict(c.objective, pos, N);
+    c.awards.push({ season: c.season, champion: table[0].id, cup: c.cur.cup ? c.cur.cup.champion : null,
+      boot: boot ? { name: scorerName(boot.teamId, boot.num), teamId: boot.teamId, goals: boot.goals } : null,
+      manager: (verdict.tier === 'exceeded' || pos === 1) ? c.team : table[0].id });
+    c.news = decideCareerNews(c, pos, N, verdict);
     saveStore();
+    navigateTo('career-news', { addToHistory: false }); game.history = ['title'];
+    renderCareerNews();
+  }
+  function transferBudget(verdict) { return verdict.tier === 'exceeded' ? 4 : verdict.tier === 'met' ? 3 : verdict.tier === 'missed' ? 2 : 1; }
+  function decideCareerNews(c, pos, N, verdict) {
+    const obj = c.objective;
+    const stronger = TEAMS.map(x => x.id).filter(id => id !== c.team && strengthOf(id) > strengthOf(c.team) + 1)
+      .sort((a, b) => strengthOf(b) - strengthOf(a));
+    // sacked: badly failed the brief (3+ short of target, or finished dead last)
+    if (verdict.tier === 'failed') return { kind:'sacked', pos, verdict };
+    // poached: smashed expectations at a smaller club — a bigger side comes calling
+    if ((verdict.tier === 'exceeded' || (pos === 1 && obj.kind !== 'win')) && stronger.length) {
+      return { kind:'poach', pos, verdict, suitor: stronger[0], budget: transferBudget(verdict) };
+    }
+    return { kind:'stay', pos, verdict, budget: transferBudget(verdict) };
+  }
+  function beginNextSeason() {
+    const c = game.career; c.season++; c.tenure = (c.tenure || 1) + 1; newCareerSeason(); saveStore();
     navigateTo('career', { addToHistory: false }); game.history = ['title'];
-    renderCareer(`Season ${c.season}: finished ${ordinal(pos)}` + (pos === 1 ? ' — CHAMPIONS! 🏆' : '') + '.');
+    renderCareer(`Season ${c.season} — a fresh campaign. The board want you to ${c.objective.label.toLowerCase()}.`);
+  }
+  function careerAcceptPoach() {
+    const c = game.career, suitor = c.news.suitor;
+    c.team = suitor; c.boosts = { ATT:0, MID:0, DEF:0, PAC:0, GK:0 }; c.tenure = 1; c.news = null;
+    game.ts.you = suitor; c.season++; newCareerSeason(); saveStore();
+    navigateTo('career', { addToHistory: false }); game.history = ['title'];
+    renderCareer(`A new chapter at ${teamById(suitor).name}. The board want you to ${c.objective.label.toLowerCase()}.`);
+  }
+  function careerDeclinePoach() {
+    const c = game.career; if (!c.news) return;
+    c.news.kind = 'stay'; c.news.budget = (c.news.budget || transferBudget(c.news.verdict)) + 1;   // loyalty bonus
+    c.news.loyal = true; saveStore(); renderCareerNews();
+  }
+  function careerRehire(youId) {
+    const c = game.career;
+    c.team = youId; c.boosts = { ATT:0, MID:0, DEF:0, PAC:0, GK:0 }; c.tenure = 1; c.news = null;
+    game.ts.you = youId; c.season++; newCareerSeason(); saveStore();
+    navigateTo('career', { addToHistory: false }); game.history = ['title'];
+    renderCareer(`A fresh start at ${teamById(youId).name}. Prove them wrong — ${c.objective.label.toLowerCase()}.`);
+  }
+  function careerRetire() { game.career = null; saveStore(); game.history = []; navigateTo('title', { addToHistory: false }); }
+  function careerBuy(stat) {
+    const c = game.career, n = c.news; if (!n || !n.budget || n.budget <= 0) return;
+    c.boosts[stat] = (c.boosts[stat] || 0) + 1; n.budget--;
+    saveStore(); renderTransfers();
   }
 
-  function careerTableHTML() {
-    const c = game.career, table = computeTable(c.cur);
-    let h = `<div class="lg-row lg-head"><span class="lg-pos">#</span><span class="lg-team">Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span class="lg-pts">Pts</span></div>`;
-    table.forEach((t, i) => {
-      const you = t.id === c.team ? ' you-row' : '', champ = c.cur.done && i === 0 ? ' lg-champ' : '';
-      h += `<div class="lg-row${you}${champ}"><span class="lg-pos">${i+1}</span><span class="lg-team"><span class="ct-dot" style="background:${teamById(t.id).col}"></span>${teamById(t.id).code}</span><span>${t.P}</span><span>${t.W}</span><span>${t.D}</span><span>${t.L}</span><span>${t.GD>0?'+':''}${t.GD}</span><span class="lg-pts">${t.Pts}</span></div>`;
-    });
-    return h;
-  }
+  function careerTableHTML() { const c = game.career; return `<div class="league-table">${standingsHTML(c.cur, c.team, c.cur.done)}</div>`; }
   function careerScorersHTML() {
     const c = game.career, boot = bootTable().slice(0, 10);
     if (!boot.length) return `<p class="cr-empty">No goals yet — play a match to start the Golden Boot race.</p>`;
@@ -2971,7 +3236,10 @@
   }
   function careerHistoryHTML() {
     const c = game.career;
-    let h = `<div class="cr-cabinet"><span class="cr-trophy">🏆</span><div><div class="cr-trophy-n">${c.trophies.length} League ${c.trophies.length===1?'title':'titles'}</div><div class="cr-trophy-sub">${teamById(c.team).name}</div></div></div>`;
+    const leagueT = c.trophies.filter(t => t.title === 'League').length, cupT = c.trophies.filter(t => t.title === 'Cup').length;
+    let h = `<div class="cr-cabinet"><span class="cr-trophy">🏆</span><div><div class="cr-trophy-n">${leagueT} League · ${cupT} Cup</div><div class="cr-trophy-sub">${teamById(c.team).name} · ${c.tenure||1} season${(c.tenure||1)===1?'':'s'} in charge</div></div></div>`;
+    const inv = ['ATT','MID','DEF','PAC','GK'].filter(k => (c.boosts && c.boosts[k])).map(k => `${k}+${c.boosts[k]}`).join('  ');
+    if (inv) h += `<div class="cr-hist-head">Squad investment</div><div class="cr-invest">${inv}</div>`;
     if (!c.history.length) { h += `<p class="cr-empty">Finish a season to fill your cabinet.</p>`; return h; }
     h += `<div class="cr-hist-head">Past seasons</div>`;
     c.history.slice().reverse().forEach(s => {
@@ -2986,17 +3254,80 @@
   }
   function renderCareer(status) {
     const c = game.career; if (!c) return;
+    c.tab = c.tab || 'table';
     $('career-title').textContent = teamById(c.team).name;
     $('career-meta').textContent = c.cur.done ? `Season ${c.season} · done` : `Season ${c.season} · MD ${c.cur.round+1}/${c.cur.fixtures.length}`;
-    const tab = c.tab || 'table';
-    ['table','scorers','history'].forEach(t => { const el = document.querySelector(`[data-action="career-tab-${t}"]`); if (el) el.classList.toggle('on', t === tab); });
-    $('career-content').innerHTML = tab === 'table' ? careerTableHTML() : tab === 'scorers' ? careerScorersHTML() : careerHistoryHTML();
+    const oEl = $('career-obj'); if (oEl) oEl.innerHTML = c.objective ? `🎯 ${c.objective.label}` : '';
+    const fEl = $('career-form'); if (fEl) fEl.innerHTML = formHTML(seasonForm(c.cur.fixtures, c.cur.results, c.team, 5));
+    ['table','fixtures','cup','scorers','history'].forEach(t => { const el = document.querySelector(`[data-action="career-tab-${t}"]`); if (el) el.classList.toggle('on', t === c.tab); });
+    $('career-content').innerHTML =
+        c.tab === 'fixtures' ? `<div class="fx-list">${fixturesHTML(c.cur.fixtures, c.cur.results, c.team, c.cur.round)}</div>`
+      : c.tab === 'cup'      ? (c.cur.cup ? `<div class="cup-bracket">${cupBracketHTML(c.cur.cup)}</div>` : '')
+      : c.tab === 'scorers'  ? careerScorersHTML()
+      : c.tab === 'history'  ? careerHistoryHTML()
+      :                        careerTableHTML();
     if (status != null) $('career-status').textContent = status;
-    const cp = $('career-play'), cw = $('career-watch');
-    if (c.cur.done) { cp.textContent = `Start Season ${c.season + 1}`; }
-    else { const f = careerFixtureForYou(); const opp = f ? (f.pair[0] === c.team ? f.pair[1] : f.pair[0]) : null; cp.textContent = opp ? `Play Match · ${teamById(c.team).code} v ${teamById(opp).code}` : 'Play Match'; }
-    if (cw) cw.classList.toggle('hidden', c.cur.done);   // can only watch when there's a match to play
+    const cp = $('career-play'), cw = $('career-watch'), cpu = $('career-cup-play');
+    if (c.cur.done) {
+      cp.textContent = c.news ? 'Season Review ▸' : `Start Season ${c.season + 1}`;
+      if (cw) cw.classList.add('hidden'); if (cpu) cpu.classList.add('hidden');
+    } else {
+      const f = careerFixtureForYou(); const opp = f ? (f.pair[0] === c.team ? f.pair[1] : f.pair[0]) : null;
+      cp.textContent = opp ? `Play · ${teamById(c.team).code} v ${teamById(opp).code}` : 'Play Match';
+      if (cw) cw.classList.remove('hidden');
+      const cup = c.cur.cup, cupOn = cup && cup.alive && !cup.champion;
+      if (cpu) { cpu.classList.toggle('hidden', !cupOn); if (cupOn) cpu.textContent = `🏆 ${roundName(cup.rounds[cup.round].length)} · v ${teamById(cupOpponentC(cup)).code}`; }
+    }
   }
+  function careerNewsContinue() {
+    const c = game.career, n = c.news;
+    if (n && n.kind === 'stay' && n.budget > 0) { navigateTo('career-transfers'); renderTransfers(); }
+    else beginNextSeason();
+  }
+  function renderCareerNews() {
+    const c = game.career, n = c.news; if (!n) { navigateTo('career'); renderCareer(); return; }
+    const N = c.cur.teams.length, a = c.awards[c.awards.length - 1] || {};
+    $('cn-title').textContent = `Season ${c.season} Review`;
+    $('cn-verdict').innerHTML = `<div class="cn-finish">${teamById(c.team).code} finished <b>${ordinal(n.pos)}</b> of ${N}</div>`
+      + `<div class="cn-obj">Objective: ${c.objective.label} — <span class="cn-${n.verdict.met?'met':'miss'}">${VERDICT_TEXT[n.verdict.tier]}</span></div>`;
+    let aw = `<div class="cn-award"><span>🏆 League Champions</span><span><span class="ct-dot" style="background:${teamById(a.champion).col}"></span>${teamById(a.champion).code}</span></div>`;
+    if (a.cup) aw += `<div class="cn-award"><span>🏆 Cup Winners</span><span><span class="ct-dot" style="background:${teamById(a.cup).col}"></span>${teamById(a.cup).code}</span></div>`;
+    if (a.boot) aw += `<div class="cn-award"><span>🥇 Golden Boot</span><span>${a.boot.name} · ${a.boot.goals}</span></div>`;
+    if (a.manager) aw += `<div class="cn-award"><span>🎖 Manager of the Season</span><span>${teamById(a.manager).code}${a.manager===c.team?' — YOU!':''}</span></div>`;
+    $('cn-awards').innerHTML = aw;
+    let oText, btns;
+    if (n.kind === 'sacked') {
+      oText = `The board have seen enough — you've been <b>sacked</b> by ${teamById(c.team).name}.`;
+      btns = `<button class="ts-confirm focusable" data-action="cn-rehire">Find a new club</button>`
+           + `<button class="title-btn focusable" data-action="cn-retire">Retire</button>`;
+    } else if (n.kind === 'poach') {
+      oText = `<b>${teamById(n.suitor).name}</b> — a bigger club — want you as their manager.`;
+      btns = `<button class="ts-confirm focusable" data-action="cn-accept-poach">Join ${teamById(n.suitor).code}</button>`
+           + `<button class="title-btn focusable" data-action="cn-decline-poach">Stay loyal</button>`;
+    } else {
+      oText = n.loyal ? `You stay loyal to ${teamById(c.team).name}, and the board reward it with extra funds.`
+                      : (n.verdict.met ? `The board are delighted. Your job is safe.` : `The board keep faith — for now.`);
+      btns = `<button class="ts-confirm focusable" data-action="cn-continue">${n.budget>0?`Transfer Window · ${n.budget} pts`:`Start Season ${c.season+1}`} ▸</button>`;
+    }
+    $('cn-offer').innerHTML = oText;
+    $('cn-actions').innerHTML = btns;
+    focusFirst(screens['career-news']);
+  }
+  function renderTransfers() {
+    const c = game.career, n = c.news; if (!n) { navigateTo('career'); renderCareer(); return; }
+    const t = teamById(c.team);
+    $('ct-title').textContent = `${t.name} · Transfers`;
+    $('ct-budget').textContent = n.budget > 0 ? `${n.budget} transfer point${n.budget===1?'':'s'} to spend` : 'Budget spent';
+    $('ct-ratings').innerHTML = ['ATT','MID','DEF','PAC','GK'].map(k => {
+      const base = t.r[k], boost = (c.boosts && c.boosts[k]) || 0, val = clamp(base + boost, 1, 99), can = n.budget > 0 && val < 99;
+      return `<div class="ct-row"><span class="ct-stat">${k}</span>`
+        + `<span class="rt-bar"><span class="rt-fill" style="width:${val}%"></span></span>`
+        + `<span class="ct-val">${val}${boost?` <span class="ct-boost">+${boost}</span>`:''}</span>`
+        + `<button class="ct-buy focusable" data-action="ct-buy:${k}"${can?'':' disabled'}>+</button></div>`;
+    }).join('');
+    focusFirst(screens['career-transfers']);
+  }
+  function startRehireFlow() { game.ts.mode = 'rehire'; game.ts.step = 0; game.ts.idx = 0; navigateTo('team-select'); }
 
   // ============================================================
   // EFFECTS
@@ -3317,29 +3648,43 @@
       scene.add(g);
     };
     buildGoal(-CFG.PL / 2, -1); buildGoal(CFG.PL / 2, 1);
-    // shared geometries
-    const bodyGeo = new T.CapsuleGeometry(0.7, 1.5, 6, 12); bodyGeo.translate(0, 1.45, 0);
-    const headGeo = new T.SphereGeometry(0.52, 14, 12); headGeo.translate(0, 2.76, 0);
-    const blobGeo = new T.CircleGeometry(1.1, 18); blobGeo.rotateX(-Math.PI / 2);
-    const headMat = new T.MeshLambertMaterial({ color: 0xf0c79e, emissive: 0x3a2a1e });
+    // shared geometries — a stylised humanoid: head + jersey torso + shorts + two legs + two arms.
+    // Limb geos pivot at the JOINT (top), so a per-instance X-rotation swings them through the gait.
+    const headGeo = new T.SphereGeometry(0.40, 12, 10); headGeo.translate(0, 2.86, 0);
+    const torsoGeo = new T.BoxGeometry(0.82, 1.00, 0.44); torsoGeo.translate(0, 2.00, 0);     // jersey
+    const shortsGeo = new T.BoxGeometry(0.80, 0.44, 0.46); shortsGeo.translate(0, 1.42, 0);
+    const legGeo = new T.CapsuleGeometry(0.17, 1.06, 3, 6); legGeo.translate(0, -0.70, 0);     // hip pivot at y=0, foot at y=-1.4
+    const armGeo = new T.CapsuleGeometry(0.135, 0.74, 3, 6); armGeo.translate(0, -0.50, 0);    // shoulder pivot at y=0
+    const blobGeo = new T.CircleGeometry(1.0, 16); blobGeo.rotateX(-Math.PI / 2);
+    const skinMat = new T.MeshLambertMaterial({ color: 0xf0c79e, emissive: 0x6e4d33, emissiveIntensity: 0.85 });   // head + bare arms + legs (shared, bright enough to read on the additive display)
     const blobMat = new T.MeshBasicMaterial({ color: 0x223028, transparent: true, opacity: 0.5, depthWrite: false });
     const N = 11;
     const sides = {};
     ['home', 'away'].forEach(side => {
-      const bodyMat = new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0.7 });
-      const body = new T.InstancedMesh(bodyGeo, bodyMat, N);
-      const head = new T.InstancedMesh(headGeo, headMat, N);
-      const blob = new T.InstancedMesh(blobGeo, blobMat, N);
-      [body, head, blob].forEach(m => { m.frustumCulled = false; m.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(m); });
-      sides[side] = { body, head, blob, bodyMat };
+      const kitMat = new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0.78 });   // jersey (team colour)
+      const shortsMat = new T.MeshLambertMaterial({ color: 0xdddddd, emissive: 0x222222, emissiveIntensity: 0.72 });
+      const head   = new T.InstancedMesh(headGeo,   skinMat,   N);
+      const torso  = new T.InstancedMesh(torsoGeo,  kitMat,    N);
+      const shorts = new T.InstancedMesh(shortsGeo, shortsMat, N);
+      const legs   = new T.InstancedMesh(legGeo,    skinMat,   N * 2);   // 2 per player (instance 2i = left, 2i+1 = right)
+      const arms   = new T.InstancedMesh(armGeo,    skinMat,   N * 2);   // bare arms (skin) → clear humanoid silhouette
+      const blob   = new T.InstancedMesh(blobGeo,   blobMat,   N);
+      [head, torso, shorts, legs, arms, blob].forEach(m => { m.frustumCulled = false; m.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(m); });
+      sides[side] = { head, torso, shorts, legs, arms, blob, kitMat, shortsMat };
     });
-    // ball + halo + shadow
-    const ball = new T.Mesh(new T.SphereGeometry(0.34, 16, 12), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 0.6, roughness: 0.5, metalness: 0 }));
+    // ball — a bit bigger, self-lit, with a soft warm glow (no ring): easy to spot, still realistic
+    const ball = new T.Mesh(new T.SphereGeometry(0.44, 18, 14), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 1.0, roughness: 0.5, metalness: 0 }));
+    // a thin dark contour so the ball keeps a defined edge against bright lines on a regular screen
+    // (harmless on the additive glasses display, where dark = transparent)
+    const ballOutline = new T.Mesh(new T.SphereGeometry(0.44 * 1.3, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
+    ball.add(ballOutline);   // parented → follows the ball automatically
     scene.add(ball);
+    // soft glow halo (additive radial gradient — a gentle bloom, never a hard circle)
     const halo = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, BALL_GLOW), transparent: true, blending: T.AdditiveBlending, depthWrite: false }));
     scene.add(halo);
+    [ball, ballOutline, halo].forEach(m => { m.frustumCulled = false; });
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
-    ballShadow.scale.setScalar(0.6); scene.add(ballShadow);
+    ballShadow.scale.setScalar(0.72); scene.add(ballShadow);
     // indicator rings + chevron
     const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
@@ -3353,34 +3698,64 @@
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
     const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
-    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), ready: true };
+    R3D = { T, renderer, scene, camera, ground, tex, ball, halo, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), part: new T.Object3D(), m4: new T.Matrix4(), ready: true };
     applyCam();        // pose the camera from the selected Side/Behind preset
     refresh3DKits();
   }
   function refresh3DKits() {
     if (!R3D || !game.home || !game.away) return;   // teams may not exist yet (3D can build before a match)
-    R3D.sides.home.bodyMat.color.set(teamRenderCol('home')); R3D.sides.home.bodyMat.emissive.set(teamRenderCol('home'));
-    R3D.sides.away.bodyMat.color.set(teamRenderCol('away')); R3D.sides.away.bodyMat.emissive.set(teamRenderCol('away'));
+    ['home', 'away'].forEach(side => {
+      const kit = teamRenderCol(side), s = R3D.sides[side];
+      s.kitMat.color.set(kit); s.kitMat.emissive.set(kit);                       // jersey + sleeves glow the team colour
+      s.shortsMat.color.set(shade(kit, -0.26)); s.shortsMat.emissive.set(shade(kit, -0.42));   // shorts: a darker kit shade
+    });
+  }
+  // place one swinging limb: world = playerRoot × (offset · X-swing), into instance idx of mesh
+  function setLimb3D(RM, ox, oy, oz, swingX, mesh, idx) {
+    const part = R3D.part, m4 = R3D.m4;
+    part.position.set(ox, oy, oz); part.rotation.set(swingX, 0, 0); part.scale.set(1, 1, 1); part.updateMatrix();
+    m4.multiplyMatrices(RM, part.matrix); mesh.setMatrixAt(idx, m4);
   }
   function syncSide3D(side) {
-    const r = R3D, d = r.dummy, S = r.sides[side], players = teamObj(side).players;
+    const r = R3D, root = r.dummy, S = r.sides[side], players = teamObj(side).players;
+    const HIDE = r._hideM || (r._hideM = new r.T.Matrix4().makeScale(1e-4, 1e-4, 1e-4).setPosition(0, -500, 0));
     for (let i = 0; i < 11; i++) {
       const p = players[i];
-      if (!p) { d.position.set(0, -200, 0); d.scale.setScalar(0.0001); d.rotation.set(0, 0, 0); d.updateMatrix(); S.body.setMatrixAt(i, d.matrix); S.head.setMatrixAt(i, d.matrix); S.blob.setMatrixAt(i, d.matrix); continue; }
+      if (!p) {
+        S.head.setMatrixAt(i, HIDE); S.torso.setMatrixAt(i, HIDE); S.shorts.setMatrixAt(i, HIDE); S.blob.setMatrixAt(i, HIDE);
+        S.legs.setMatrixAt(2*i, HIDE); S.legs.setMatrixAt(2*i+1, HIDE); S.arms.setMatrixAt(2*i, HIDE); S.arms.setMatrixAt(2*i+1, HIDE);
+        continue;
+      }
       const sc = p.isGK ? 1.12 : 1;
-      const bob = (len(p.vx, p.vy) > 0.5) ? Math.sin(p.runPhase) * 0.06 : 0;
-      d.position.set(p.x - 44, bob, p.y - 52.5); d.rotation.set(0, -p.heading + Math.PI / 2, 0); d.scale.setScalar(sc); d.updateMatrix();
-      S.body.setMatrixAt(i, d.matrix); S.head.setMatrixAt(i, d.matrix);
-      d.position.set(p.x - 44, 0.02, p.y - 52.5); d.rotation.set(0, 0, 0); d.scale.setScalar(sc * (p.isGK ? 1.05 : 1)); d.updateMatrix(); S.blob.setMatrixAt(i, d.matrix);
+      const sp = len(p.vx, p.vy), moving = sp > 0.4;
+      const s = moving ? Math.sin(p.runPhase) : 0;
+      const amp = moving ? clamp(sp * 0.09, 0.16, 0.7) : 0;     // longer strides the faster you run
+      const bob = moving ? Math.abs(Math.cos(p.runPhase)) * 0.07 : 0;   // rise on each stride
+      const legA = s * amp, armA = -s * amp * 0.6;              // arms counter-swing to the legs
+      // body root (position + facing + scale); rigid parts share this matrix
+      root.position.set(p.x - 44, bob, p.y - 52.5); root.rotation.set(0, -p.heading + Math.PI/2, 0); root.scale.setScalar(sc); root.updateMatrix();
+      const RM = root.matrix;
+      S.head.setMatrixAt(i, RM); S.torso.setMatrixAt(i, RM); S.shorts.setMatrixAt(i, RM);
+      setLimb3D(RM, -0.22, 1.40, 0,  legA, S.legs, 2*i);       // left / right leg pivot at the hips
+      setLimb3D(RM,  0.22, 1.40, 0, -legA, S.legs, 2*i+1);
+      setLimb3D(RM, -0.50, 2.42, 0,  armA, S.arms, 2*i);       // left / right arm pivot at the shoulders
+      setLimb3D(RM,  0.50, 2.42, 0, -armA, S.arms, 2*i+1);
+      // shadow blob — flat on the pitch, no facing / bob
+      root.position.set(p.x - 44, 0.02, p.y - 52.5); root.rotation.set(0, 0, 0); root.scale.setScalar(sc * (p.isGK ? 1.05 : 1)); root.updateMatrix();
+      S.blob.setMatrixAt(i, root.matrix);
     }
-    S.body.instanceMatrix.needsUpdate = true; S.head.instanceMatrix.needsUpdate = true; S.blob.instanceMatrix.needsUpdate = true;
+    S.head.instanceMatrix.needsUpdate = true; S.torso.instanceMatrix.needsUpdate = true; S.shorts.instanceMatrix.needsUpdate = true;
+    S.legs.instanceMatrix.needsUpdate = true; S.arms.instanceMatrix.needsUpdate = true; S.blob.instanceMatrix.needsUpdate = true;
   }
   function render3D() {
     const r = R3D, b = game.ball;
     syncSide3D('home'); syncSide3D('away');
-    const bz = 0.34 + (b.z || 0);
+    const bz = 0.44 + (b.z || 0);
     r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
-    r.halo.position.set(b.x - 44, bz, b.y - 52.5); const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 170); r.halo.scale.setScalar(2.2 + pulse * 0.7);
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 240);
+    const camDist = r.camera.position.distanceTo(r.ball.position);
+    // a soft glow that hugs the ball — lightly distance-compensated so it stays easy to spot near or far, but always a gentle bloom (no ring)
+    r.halo.position.set(b.x - 44, bz, b.y - 52.5); r.halo.scale.setScalar(clamp(camDist * 0.03, 2.2, 4.4) * (1 + 0.07 * pulse));
     r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
     // indicators (mirror the 2D colour language)
     const aId = (!game._allAI) ? game.activeId : null;
@@ -3917,6 +4292,9 @@
       sendOff: (id) => { const p = playerById(id); if (p) sendOff(p); },
       injure: (id) => { const p = playerById(id); if (p) injurePlayer(p); },
       setStam: (id, v) => { const p = playerById(id); if (p) p.stam = v; },
+      // testing: end the on-screen match with a given scoreline (drives season/cup result handlers)
+      finishMatch: (hs, as) => { if (!game.home) return false; game.home.score = hs|0; game.away.score = as|0; game.clockSec = HALF_SIM * 2; game.half = 2; goFulltime(); return true; },
+      careerCupPlay: () => careerCupPlay(), leagueCupPlay: () => leagueCupPlay(),
       render,
     };
   }

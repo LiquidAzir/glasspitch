@@ -578,6 +578,60 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
 .cr-hist-pts { color: var(--ink-2); font-size: 12px; }
 .cr-hist-champ { display: flex; align-items: center; gap: 5px; color: var(--ink-2); font-size: 12px; }
 
+/* season bar: board objective + recent form */
+.season-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 10px 8px; flex: none; }
+.season-obj { font-size: 13px; font-weight: 700; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.season-form { display: flex; gap: 4px; flex: none; }
+.form-chip { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; border-radius: 5px; font-size: 11px; font-weight: 900; color: #06120c; }
+.form-chip.form-W { background: var(--grn); }
+.form-chip.form-D { background: var(--gold); }
+.form-chip.form-L { background: var(--red); color: #fff; }
+.form-chip.form-none { background: transparent; color: var(--ink-3); width: auto; }
+
+/* season fixtures / schedule */
+.fx-list { display: flex; flex-direction: column; gap: 2px; background: var(--surface); border-radius: 12px; padding: 6px; }
+.fx-row { display: grid; grid-template-columns: 40px 22px 1fr 52px; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; font-weight: 700; border-radius: 7px; font-variant-numeric: tabular-nums; }
+.fx-row.fx-next { background: rgba(88,214,255,0.14); box-shadow: inset 0 0 0 1px rgba(88,214,255,0.4); }
+.fx-md { color: var(--ink-3); font-size: 11px; font-weight: 800; }
+.fx-ha { color: var(--ink-2); text-align: center; }
+.fx-opp { display: flex; align-items: center; gap: 6px; color: var(--ink); overflow: hidden; }
+.fx-res { text-align: right; font-weight: 900; }
+.fx-res.fx-up { color: var(--ink-3); }
+.fx-res.form-W { color: var(--grn); }
+.fx-res.form-D { color: var(--gold); }
+.fx-res.form-L { color: var(--red); }
+.lg-scorers { margin-top: 8px; background: var(--surface); border-radius: 12px; padding: 4px 6px 8px; }
+.cr-invest { padding: 4px 8px 8px; color: var(--cyn); font-weight: 800; letter-spacing: 0.5px; }
+
+/* tighten tabs when the bar holds 5 (career) */
+.career-tabs .cr-tab { font-size: 13px; padding: 0 2px; }
+
+/* career: end-of-season review */
+.cn-content { gap: 0; }
+.cn-verdict { background: var(--surface-2); border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 16px; text-align: center; margin-bottom: 10px; }
+.cn-finish { font-size: 20px; font-weight: 800; }
+.cn-finish b { color: var(--gold); }
+.cn-obj { font-size: 14px; color: var(--ink-2); margin-top: 4px; }
+.cn-met { color: var(--grn); font-weight: 800; }
+.cn-miss { color: var(--red); font-weight: 800; }
+.cn-head { font-size: 13px; font-weight: 800; color: var(--gold); letter-spacing: 0.5px; padding: 6px 4px 6px; }
+.cn-awards { background: var(--surface); border-radius: 12px; padding: 4px 6px; }
+.cn-award { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 8px; font-size: 14px; font-weight: 700; border-bottom: 1px solid var(--line); }
+.cn-award:last-child { border-bottom: none; }
+.cn-award > span:last-child { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+.cn-offer { margin-top: 12px; padding: 12px 14px; background: rgba(88,214,255,0.10); border: 1.5px solid rgba(88,214,255,0.4); border-radius: 12px; font-size: 15px; line-height: 1.4; text-align: center; }
+
+/* career: transfer window */
+.ct-hint { color: var(--ink-2); font-size: 13px; line-height: 1.4; padding: 2px 4px 12px; }
+.ct-ratings { display: flex; flex-direction: column; gap: 8px; }
+.ct-row { display: grid; grid-template-columns: 40px 1fr 64px 44px; align-items: center; gap: 10px; background: var(--surface); border-radius: 10px; padding: 8px 12px; }
+.ct-stat { font-weight: 800; color: var(--ink-2); font-size: 13px; }
+.ct-val { text-align: right; font-weight: 900; font-variant-numeric: tabular-nums; }
+.ct-boost { color: var(--grn); font-size: 12px; }
+.ct-buy { width: 40px; height: 34px; border-radius: 9px; border: 1.5px solid var(--cyn); background: rgba(88,214,255,0.14); color: var(--cyn); font-size: 20px; font-weight: 900; cursor: pointer; }
+.ct-buy:focus { transform: scale(1.06); }
+.ct-buy:disabled { opacity: 0.3; border-color: var(--line); color: var(--ink-3); background: transparent; cursor: default; }
+
 /* shootout */
 #shootout, #setpiece { padding: 0; }
 #pen-canvas, #sp-canvas { position: absolute; inset: 0; width: 600px; height: 600px; }

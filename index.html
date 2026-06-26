@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=46">
+  <link rel="stylesheet" href="styles.css?v=56">
 </head>
 <body>
   <div id="app">
@@ -247,8 +247,14 @@
         <h1 id="career-title">Career</h1>
         <span class="header-meta" id="career-meta">Season 1</span>
       </header>
+      <div class="season-bar">
+        <span class="season-obj" id="career-obj"></span>
+        <span class="season-form" id="career-form"></span>
+      </div>
       <div class="career-tabs">
         <button class="cr-tab focusable on" data-action="career-tab-table">Table</button>
+        <button class="cr-tab focusable" data-action="career-tab-fixtures">Fixtures</button>
+        <button class="cr-tab focusable" data-action="career-tab-cup">Cup</button>
         <button class="cr-tab focusable" data-action="career-tab-scorers">Scorers</button>
         <button class="cr-tab focusable" data-action="career-tab-history">Cabinet</button>
       </div>
@@ -256,8 +262,42 @@
       <p class="cup-status" id="career-status"></p>
       <nav class="cup-actions">
         <button class="ts-confirm focusable" data-action="career-play" id="career-play">Play Match</button>
+        <button class="title-btn focusable hidden" data-action="career-cup-play" id="career-cup-play">🏆 Cup Match</button>
         <button class="title-btn focusable" data-action="career-watch" id="career-watch">👁 Watch</button>
         <button class="title-btn focusable" data-action="career-new" id="career-new">New Career</button>
+      </nav>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CAREER — end-of-season review / board verdict                -->
+    <!-- ============================================================ -->
+    <div id="career-news" class="screen hidden">
+      <header class="header">
+        <h1 id="cn-title">Season Review</h1>
+      </header>
+      <div class="content cn-content">
+        <div class="cn-verdict" id="cn-verdict"></div>
+        <div class="cn-head">Honours</div>
+        <div class="cn-awards" id="cn-awards"></div>
+        <div class="cn-offer" id="cn-offer"></div>
+      </div>
+      <nav class="cup-actions" id="cn-actions"></nav>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CAREER — transfer window (spend points to boost the squad)   -->
+    <!-- ============================================================ -->
+    <div id="career-transfers" class="screen hidden">
+      <header class="header">
+        <h1 id="ct-title">Transfers</h1>
+        <span class="header-meta" id="ct-budget"></span>
+      </header>
+      <div class="content">
+        <p class="ct-hint">Spend transfer points to strengthen your squad. Boosts are permanent and carry across seasons.</p>
+        <div class="ct-ratings" id="ct-ratings"></div>
+      </div>
+      <nav class="cup-actions">
+        <button class="ts-confirm focusable" data-action="ct-begin" id="ct-begin">Start Season ▸</button>
       </nav>
     </div>
 
@@ -281,7 +321,7 @@
           <div class="tourn-ic">🥇</div>
           <div class="tourn-info">
             <div class="tourn-name">League</div>
-            <div class="tourn-desc">Full season. Play every team once, earn points, top the table to win the title.</div>
+            <div class="tourn-desc">Full home-and-away season — face every club twice, chase the title, and a knockout Cup runs alongside for a shot at the Double.</div>
           </div>
         </button>
       </div>
@@ -296,12 +336,20 @@
         <h1>League</h1>
         <span class="header-meta" id="league-round">Matchday 1</span>
       </header>
-      <div class="content">
-        <div class="league-table" id="league-table"></div>
-        <p class="cup-status" id="league-status"></p>
+      <div class="season-bar">
+        <span class="season-obj" id="league-obj"></span>
+        <span class="season-form" id="league-form"></span>
       </div>
+      <div class="career-tabs">
+        <button class="cr-tab focusable on" data-action="league-tab-table">Table</button>
+        <button class="cr-tab focusable" data-action="league-tab-fixtures">Fixtures</button>
+        <button class="cr-tab focusable" data-action="league-tab-cup">Cup</button>
+      </div>
+      <div class="content" id="league-content"></div>
+      <p class="cup-status" id="league-status"></p>
       <nav class="cup-actions">
         <button class="ts-confirm focusable" data-action="league-play" id="league-play">Play Match</button>
+        <button class="title-btn focusable hidden" data-action="league-cup-play" id="league-cup-play">🏆 Cup Match</button>
         <button class="title-btn focusable" data-action="league-watch" id="league-watch">👁 Watch</button>
         <button class="title-btn focusable" data-action="league-new" id="league-new">New Season</button>
       </nav>
@@ -460,6 +508,6 @@
     </div>
     <button class="touch-btn touch-pinch" data-touch-key="Enter" aria-label="Action / switch">●</button>
   </div>
-  <script src="app.js?v=46"></script>
+  <script src="app.js?v=56"></script>
 </body>
 </html>

@@ -33,6 +33,7 @@
     dashDur: 0.42, dashCd: 2.4, dashBoost: 1.7,
     // Timing
     steerHold: 0.75,            // s a manual swipe overrides defensive auto-seek
+    switchHyst: 6,              // m the nearest challenger must be closer to the ball before idle control hands over (anti-flicker)
     comboWindow: 700, minComboGap: 45, dashWindow: 300,
     goalCelebrate: 2.0, restartPause: 0.35,
     // HUD
@@ -1404,16 +1405,28 @@
   // swipes / changes the player's direction under you. We only re-pick automatically
   // when your team gains possession (control the carrier) or the current pick is
   // invalid (none / GK / subbed off / sent off).
+  function bestChallenger() {                                                    // home outfielder best placed to win the ball
+    let best = null, bt = 1e9;
+    for (const p of game.home.players) { if (p.isGK) continue; const t = timeToBall(p); if (t < bt) { bt = t; best = p; } }
+    return best;
+  }
   function chooseActive(dt) {
     game.activeLockT = Math.max(0, game.activeLockT - dt);
     const b = game.ball;
     const owner = playerById(b.owner);
     if (owner && owner.side === 'home') { game.activeId = owner.id; return; }   // your team has it → control the carrier
     const cur = playerById(game.activeId);
-    if (cur && !cur.isGK && cur.side === 'home') return;                         // keep your current player (tap to switch)
-    let best = null, bt = 1e9;                                                   // fallback only: no valid active player
-    for (const p of game.home.players) { if (p.isGK) continue; const t = timeToBall(p); if (t < bt) { bt = t; best = p; } }
-    if (best) game.activeId = best.id;
+    const curValid = cur && !cur.isGK && cur.side === 'home';
+    const best = bestChallenger();
+    if (!curValid) { if (best) game.activeId = best.id; return; }               // no valid player → must re-pick
+    // NEVER pull control off the player you're actively steering, just manually switched to, or
+    // receiving a pass with — so a swipe is never hijacked mid-move.
+    const now = performance.now() / 1000;
+    const steering = (now - game.lastSteerT) < CFG.steerHold;
+    if (steering || game.activeLockT > 0 || (game._recvUntil && now < game._recvUntil)) return;
+    // Idle on defence / loose ball → keep the marker on the action: hand control to a clearly
+    // better-placed challenger so your player is never stranded far from the ball (hysteresis stops flicker).
+    if (best && best.id !== game.activeId && dist(cur, b) > dist(best, b) + CFG.switchHyst) game.activeId = best.id;
   }
 
   // ----- per-player update -----

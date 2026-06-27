@@ -477,6 +477,7 @@
       game.weather = snap.weather || 'clear'; game._ballDecelMul = game.weather === 'rain' ? 0.62 : 1;
       game.poss = (snap.poss && typeof snap.poss.home === 'number') ? { home: snap.poss.home, away: snap.poss.away } : { home: 1, away: 1 };
       game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
+      resetMatchStats();
       game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
       game.steer = { x: 0, y: 0 }; game.lastSteerT = -10; game.keys = {}; game.tapped = {};
       game.tutorial = null; game.dashCdUntil = 0; game.ticker = null;
@@ -837,6 +838,7 @@
     setWeather();
     game.poss = { home: 1, away: 1 };
     game.stats = { shots:{home:0,away:0}, sot:{home:0,away:0}, fouls:{home:0,away:0} };
+    resetMatchStats();
     game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
     game.kickoffTeam = 'away';
     setupPitchGeom();
@@ -1307,6 +1309,7 @@
   // THE PINCH — context action for the active player
   // ============================================================
   function onPinch() {
+    if (game._replay) { endGoalReplay(); return; }                   // tap to skip the goal replay
     if (game.tutorial && game.tutorial.step === TUT_STEPS.length - 1) { finishTutorial(); return; }
     if (game.watching) return;                                       // ignore pinch while spectating (use ↑↓↑↓ menu to take control)
     if (game.phase !== 'play') return;
@@ -1346,6 +1349,7 @@
   function update(dt) {
     if (game.phase === 'ended') return;
     if (game.phase === 'goal' || game.phase === 'restart') {
+      if (game._replay) { advanceReplay(dt); tickEffects(dt); decayRipples(dt); game.keys = {}; game.tapped = {}; return; }   // play the goal replay first
       game.phaseT -= dt;
       tickEffects(dt);
       decayRipples(dt);
@@ -1400,6 +1404,7 @@
     checkBounds();
     tickEffects(dt);
     decayRipples(dt);
+    recordReplayFrame();            // rolling buffer for the goal replay
 
     game.tapped = {};               // consume per-frame taps
   }
@@ -1841,6 +1846,7 @@
     if (game.tutorial) game.tutorial.passed = true;
   }
   function kickLob(p, tx, ty, skill) {
+    recordPassAttempt(p.side);
     const b = game.ball, d = len(tx - p.x, ty - p.y), err = (1 - skill) * (d * 0.12 + 1.6);
     const ex = tx + rrange(-err, err), ey = ty + rrange(-err, err);
     const dx = ex - b.x, dy = ey - b.y, n = len(dx, dy) || 1;
@@ -1878,11 +1884,14 @@
     const skill = (acc && acc.shot) || 0.9;
     const err = (1 - skill) * 6 + clamp(goalDist/30,0,1) * 1.4;
     const ex = tx + rrange(-err, err), ey = ty + rrange(-1, 1);
-    if (Math.abs(ex - CFG.PW/2) < CFG.goalHalfW) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; bumpMom(side, 0.06); SFX.crowdRoar(0.45); }   // on-frame = on target → crowd swells
+    const onT = Math.abs(ex - CFG.PW/2) < CFG.goalHalfW;
+    if (onT) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; bumpMom(side, 0.06); SFX.crowdRoar(0.45); }   // on-frame = on target → crowd swells
+    recordShot(p, side, onT); game._passSide = null;   // log for the shot map; a shot isn't a pass
     kickRaw(p, ex, ey, CFG.ballMax * (0.78 + (teamObj(side).def.r.ATT/100)*0.22), true);
   }
   function goalAimedOnTarget(tx) { return Math.abs(tx - CFG.PW/2) < CFG.goalHalfW; }
   function kickTo(p, tx, ty, isShot, skill, opt) {
+    if (!isShot) recordPassAttempt(p.side);
     const d = len(tx - p.x, ty - p.y);
     const err = (1 - skill) * (d * 0.10 + 1.5);
     // speed chosen so ground friction brings the ball ~to the target (v² = 2·decel·d), slight overhit
@@ -2022,6 +2031,7 @@
       b.owner = best.id; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.shot = false;
       b.trail.length = 0;
       game.lastTouch = best.side; game.lastKicker = null; game.lastTouchPlayer = best.id; game._lastWasShot = false;
+      if (game._passSide) { if (best.side === game._passSide && game.passStat) game.passStat[best.side].comp++; game._passSide = null; }   // pass completion
       _prevBall.x = b.x; _prevBall.y = b.y;
       if (best.side === 'home' && best.id !== game.activeId) setActive(best.id, false);
     }
@@ -2154,6 +2164,57 @@
     _prevBall.x = b.x; _prevBall.y = b.y;
   }
 
+  // ============================================================
+  // GOAL REPLAYS + MATCH STATS
+  // ============================================================
+  const REPLAY_FRAMES = 230;                          // ~3.8s of build-up buffered at 60fps
+  function recordReplayFrame() {
+    if (game.phase !== 'play') return;
+    const b = game.ball, snap = ps => ps.map(p => [p.x, p.y, p.heading, p.vx, p.vy, p.runPhase || 0]);
+    const buf = game._rbuf || (game._rbuf = []);
+    buf.push({ b: [b.x, b.y, b.z || 0], h: snap(game.home.players), a: snap(game.away.players) });
+    if (buf.length > REPLAY_FRAMES) buf.shift();
+  }
+  function startGoalReplay() {                         // returns true if a replay is now playing
+    if (game.matchMode === 'tutorial' || !game._rbuf || game._rbuf.length < 50) return false;
+    game._replay = { frames: game._rbuf, i: 0 };
+    game._rbuf = [];                                   // fresh buffer for the next move
+    const rt = $('replay-tag'); if (rt) rt.classList.add('show');
+    return true;
+  }
+  function applyReplayFrame(f) {
+    const b = game.ball; b.x = f.b[0]; b.y = f.b[1]; b.z = f.b[2];
+    const set = (arr, ps) => { for (let i = 0; i < ps.length && i < arr.length; i++) { const p = ps[i], s = arr[i]; p.x = s[0]; p.y = s[1]; p.heading = s[2]; p.vx = s[3]; p.vy = s[4]; p.runPhase = s[5]; } };
+    set(f.h, game.home.players); set(f.a, game.away.players);
+  }
+  function advanceReplay(dt) {
+    const R = game._replay;
+    R.i += dt * 60 * 0.72;                             // gentle slow-mo
+    if (R.i >= R.frames.length - 1) { endGoalReplay(); return; }
+    applyReplayFrame(R.frames[Math.floor(R.i)]);
+  }
+  function endGoalReplay() {
+    game._replay = null; game.phaseT = 0.9;            // brief pause, then kick off
+    const rt = $('replay-tag'); if (rt) rt.classList.remove('show');
+  }
+  function resetMatchStats() {
+    game.shotLog = []; game.passStat = { home: { att: 0, comp: 0 }, away: { att: 0, comp: 0 } };
+    game._passSide = null; game._rbuf = []; game._replay = null;
+    const rt = $('replay-tag'); if (rt) rt.classList.remove('show');
+  }
+  function recordShot(p, side, onTarget) {
+    const up = atkUp(side), sx = up ? p.x : CFG.PW - p.x, sy = up ? p.y : CFG.PL - p.y;   // orient so the attacked goal is at the top
+    (game.shotLog || (game.shotLog = [])).push({ nx: clamp(sx / CFG.PW, 0, 1), ny: clamp(sy / CFG.PL, 0, 1), side, on: onTarget, goal: false });
+  }
+  function shotMapHTML() {
+    const log = game.shotLog || [];
+    if (!log.length) return '';
+    const dots = log.map(s => `<span class="sm-dot ${s.side === 'home' ? 'sm-h' : 'sm-a'}${s.goal ? ' sm-goal' : s.on ? ' sm-on' : ''}" style="left:${(s.nx*100).toFixed(1)}%;top:${(s.ny*100).toFixed(1)}%"></span>`).join('');
+    return `<div class="shotmap-title">Shot map <span class="sm-leg"><span class="sm-dot sm-h"></span>${game.home.def.code}</span><span class="sm-leg"><span class="sm-dot sm-a"></span>${game.away.def.code}</span><span class="sm-leg"><span class="sm-dot sm-goal"></span>goal</span></div>`
+      + `<div class="shotmap"><span class="sm-goalline"></span>${dots}</div>`;
+  }
+  function recordPassAttempt(side) { if (game.passStat) { game.passStat[side].att++; game._passSide = side; } }
+
   function scoreGoal(side) {
     if (game.matchMode === 'tutorial') {              // celebrate but don't freeze/reset the guided flow
       showBanner('GOAL!'); SFX.goal(); pitchPunch();
@@ -2180,10 +2241,14 @@
     bumpMom(side, 0.55);                              // a goal swings the momentum hard to the scorer
     spawnGoalBurst(side);
     paintScoreboard();
+    if (game._lastWasShot && game.shotLog) {           // tag the shot that scored on the shot map
+      for (let i = game.shotLog.length - 1; i >= 0; i--) if (game.shotLog[i].side === side) { game.shotLog[i].goal = true; break; }
+    }
     const b = game.ball; b.owner = null; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0;
     _prevBall.x = b.x; _prevBall.y = b.y;
     game._lastWasShot = false;
     if (game.cup) game.cup.dirty = true;
+    startGoalReplay();                                  // instant replay of the build-up, then kick off
   }
   function goalCommentary(side, scorer, ownGoal) {
     const hs = game.home.score, as = game.away.score;
@@ -3155,6 +3220,7 @@
     game.clockSec = 0; game.half = 1; game.phase = 'play';
     game.poss = { home:1, away:1 };
     game.stats = { shots:{home:0,away:0}, sot:{home:0,away:0}, fouls:{home:0,away:0} };
+    resetMatchStats();
     game.effects = []; game.netRipple = { home:0, away:0 };
     game.matchMode = 'tutorial';
     game.tutorial = { step:0, stepT:0, steerCount:0, passiveOpp:true, passed:false, shot:false };
@@ -3922,8 +3988,8 @@
     const bz = 0.85 + (b.z || 0);
     r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
     r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
-    // indicators (mirror the 2D colour language)
-    const aId = (!game._allAI) ? game.activeId : null;
+    // indicators (mirror the 2D colour language) — hidden during a goal replay for a clean cinematic
+    const aId = (!game._allAI && !game._replay) ? game.activeId : null;
     const ap = aId ? playerById(aId) : null;
     if (ap && ap.side === 'home') {                  // ALWAYS mark the player you control (incl. the keeper)
       const wx2 = ap.x - 44, wz2 = ap.y - 52.5;
@@ -4358,10 +4424,14 @@
   function renderStatGrid(host) {
     const s = game.stats; const tot = game.poss.home + game.poss.away || 1;
     const possH = Math.round(game.poss.home / tot * 100);
+    const pc = game.passStat || { home:{att:0,comp:0}, away:{att:0,comp:0} };
+    const pcH = pc.home.att ? Math.round(pc.home.comp / pc.home.att * 100) : 0;
+    const pcA = pc.away.att ? Math.round(pc.away.comp / pc.away.att * 100) : 0;
     const rows = [
       ['POSSESSION', possH, 100 - possH, '%'],
       ['SHOTS', s.shots.home, s.shots.away, ''],
       ['ON TARGET', s.sot.home, s.sot.away, ''],
+      ['PASS ACCURACY', pcH, pcA, '%'],
       ['FOULS', s.fouls.home, s.fouls.away, ''],
     ];
     host.innerHTML = rows.map(([name, hv, av, suf]) => {
@@ -4393,6 +4463,7 @@
     $('result-score').textContent = scoreLine();
     const mo = $('result-motm'); if (mo) mo.textContent = game.motm ? `★ Man of the Match — ${game.motm.name} (${game.motm.code}) · ${game.motm.note}` : '';
     renderStatGrid($('result-stats'));
+    const sm = $('result-shotmap'); if (sm) sm.innerHTML = shotMapHTML();
   }
 
   // ============================================================

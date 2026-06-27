@@ -3634,6 +3634,29 @@
     for (let i = 0; i <= 8; i++) { const p = i / 8 * 64; x.beginPath(); x.moveTo(p, 0); x.lineTo(p, 64); x.moveTo(0, p); x.lineTo(64, p); x.stroke(); }
     const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(3, 2); return t;
   }
+  // classic soccer-ball look: 12 dark pentagons at the icosahedron vertices on a white panel base
+  // (an equirectangular map). Used as BOTH the diffuse and emissive map, so it reads as a real ball
+  // on a normal screen AND on the additive glasses display (white panels glow, pentagons stay dark).
+  function ballTex(T) {
+    const W = 512, H = 256, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    x.fillStyle = '#eef1f6'; x.fillRect(0, 0, W, H);
+    const phi = (1 + Math.sqrt(5)) / 2;
+    const raw = [[0,1,phi],[0,-1,phi],[0,1,-phi],[0,-1,-phi],[1,phi,0],[-1,phi,0],[1,-phi,0],[-1,-phi,0],[phi,0,1],[-phi,0,1],[phi,0,-1],[-phi,0,-1]];
+    const pent = (r, rot) => { x.beginPath(); for (let i = 0; i < 5; i++) { const a = -Math.PI/2 + i*1.25664 + rot; const px = Math.cos(a)*r, py = Math.sin(a)*r; i ? x.lineTo(px,py) : x.moveTo(px,py); } x.closePath(); x.fill(); };
+    x.fillStyle = '#10141b';
+    for (const [a,b,d] of raw) {
+      const L = Math.hypot(a,b,d), ny = b/L;
+      const v = Math.acos(Math.max(-1, Math.min(1, ny))) / Math.PI;       // 0..1 (top → bottom)
+      const u = Math.atan2(d/L, a/L) / 6.28319 + 0.5;                     // 0..1 (around)
+      const cy = v * H, stretch = 1 / Math.max(0.42, Math.sin(v * Math.PI));   // widen pentagons near the poles
+      for (const du of [-1, 0, 1]) {                                      // wrap across the u=0/1 seam
+        const cx = (u + du) * W; if (cx < -50 || cx > W + 50) continue;
+        x.save(); x.translate(cx, cy); x.scale(stretch, 1); pent(23, (a + d) * 2.3); x.restore();
+      }
+    }
+    const tex = new T.CanvasTexture(c); tex.anisotropy = 4; return tex;
+  }
   function build3D(T) {
     const renderer = new T.WebGLRenderer({ canvas: cv3d, alpha: true, antialias: true, premultipliedAlpha: false, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false });
     renderer.setPixelRatio(1); renderer.setSize(600, 600, false); renderer.setClearColor(0x000000, 0);
@@ -3686,15 +3709,16 @@
       sides[side] = { head, torso, shorts, legs, arms, blob, kitMat, shortsMat };
     });
     // ball — a bit bigger and self-lit; no glow halo, just a clean bright sphere (realistic)
-    const ball = new T.Mesh(new T.SphereGeometry(0.52, 18, 14), new T.MeshStandardMaterial({ color: 0xffffff, emissive: new T.Color(BALL_GLOW), emissiveIntensity: 1.0, roughness: 0.5, metalness: 0 }));
+    const ballMap = ballTex(T);
+    const ball = new T.Mesh(new T.SphereGeometry(0.85, 24, 18), new T.MeshStandardMaterial({ color: 0xffffff, map: ballMap, emissive: 0xffffff, emissiveMap: ballMap, emissiveIntensity: 0.62, roughness: 0.55, metalness: 0 }));
     // a thin dark contour so the ball keeps a defined edge against bright lines on a regular screen
     // (harmless on the additive glasses display, where dark = transparent)
-    const ballOutline = new T.Mesh(new T.SphereGeometry(0.52 * 1.26, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
+    const ballOutline = new T.Mesh(new T.SphereGeometry(0.85 * 1.12, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
     ball.add(ballOutline);   // parented → follows the ball automatically
     scene.add(ball);
     [ball, ballOutline].forEach(m => { m.frustumCulled = false; });
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
-    ballShadow.scale.setScalar(0.8); scene.add(ballShadow);
+    ballShadow.scale.setScalar(1.15); scene.add(ballShadow);
     // indicator rings + chevron
     const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
     const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
@@ -3760,7 +3784,7 @@
   function render3D() {
     const r = R3D, b = game.ball;
     syncSide3D('home'); syncSide3D('away');
-    const bz = 0.52 + (b.z || 0);
+    const bz = 0.85 + (b.z || 0);
     r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
     r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
     // indicators (mirror the 2D colour language)

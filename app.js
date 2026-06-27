@@ -364,6 +364,11 @@
       // clear transient FX so re-showing the match screen doesn't replay the last
       // goal banner / pitch punch (CSS keyframe animations restart on display)
       const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
+      // clear any lingering replay overlay (e.g. if paused during a replay)
+      if (!game._replay) {
+        const rt = $('replay-tag'); if (rt) rt.classList.remove('show');
+        const rv = $('replay-vignette'); if (rv) rv.classList.remove('show');
+      }
       const pc = $('pitch'); if (pc) pc.classList.remove('punch');
       const p3 = $('pitch3d'); if (p3) p3.classList.remove('punch');
       if (game.settings.sound) SFX.crowdStart();   // stadium ambience for the duration of the match
@@ -1331,6 +1336,7 @@
   // ============================================================
   function onPinch() {
     if (game._replay) { endGoalReplay(); return; }                   // tap to skip the goal replay
+    if (game._replayDelay != null) { game._replayDelay = null; return; }  // tap during delay skips to kick-off
     if (game.tutorial && game.tutorial.step === TUT_STEPS.length - 1) { finishTutorial(); return; }
     if (game.watching) return;                                       // ignore pinch while spectating (use ↑↓↑↓ menu to take control)
     if (game.phase !== 'play') return;
@@ -1371,7 +1377,15 @@
     if (game.phase === 'ended') return;
     if (game.phase === 'goal' || game.phase === 'restart') {
       if (game._replay) { advanceReplay(dt); tickEffects(dt); decayRipples(dt); game.keys = {}; game.tapped = {}; return; }   // play the goal replay first
-      game.phaseT -= dt;
+      // replay delay: let the GOAL banner fade, then transition to replay
+      if (game._replayDelay != null && game._replayDelay > 0) {
+        game._replayDelay -= dt;
+        if (game._replayDelay <= 0) {
+          game._replayDelay = null;
+          if (startGoalReplay()) { tickEffects(dt); decayRipples(dt); game.keys = {}; game.tapped = {}; return; }
+        }
+      }
+      if (!game._replayDelay) game.phaseT -= dt;           // freeze phaseT while waiting to start replay
       tickEffects(dt);
       decayRipples(dt);
       if (game.matchMode !== 'tutorial') autoSubTick();     // make subs only at stoppages, never mid-flow
@@ -2203,7 +2217,11 @@
     if (game.matchMode === 'tutorial' || !game._rbuf || game._rbuf.length < 50) return false;
     game._replay = { frames: game._rbuf, i: 0 };
     game._rbuf = [];                                   // fresh buffer for the next move
+    // clear the GOAL! banner so the replay tag is the only overlay
+    const mb = $('match-banner'); if (mb) { mb.classList.remove('show'); mb.textContent = ''; }
+    // show the replay bar + vignette
     const rt = $('replay-tag'); if (rt) rt.classList.add('show');
+    const rv = $('replay-vignette'); if (rv) rv.classList.add('show');
     return true;
   }
   function applyReplayFrame(f) {
@@ -2220,11 +2238,13 @@
   function endGoalReplay() {
     game._replay = null; game.phaseT = 0.9;            // brief pause, then kick off
     const rt = $('replay-tag'); if (rt) rt.classList.remove('show');
+    const rv = $('replay-vignette'); if (rv) rv.classList.remove('show');
   }
   function resetMatchStats() {
     game.shotLog = []; game.passStat = { home: { att: 0, comp: 0 }, away: { att: 0, comp: 0 } };
-    game._passSide = null; game._rbuf = []; game._replay = null;
+    game._passSide = null; game._rbuf = []; game._replay = null; game._replayDelay = null;
     const rt = $('replay-tag'); if (rt) rt.classList.remove('show');
+    const rv = $('replay-vignette'); if (rv) rv.classList.remove('show');
   }
   function recordShot(p, side, onTarget) {
     const up = atkUp(side), sx = up ? p.x : CFG.PW - p.x, sy = up ? p.y : CFG.PL - p.y;   // orient so the attacked goal is at the top
@@ -2298,7 +2318,8 @@
     _prevBall.x = b.x; _prevBall.y = b.y;
     game._lastWasShot = false;
     if (game.cup) game.cup.dirty = true;
-    startGoalReplay();                                  // instant replay of the build-up, then kick off
+    // schedule the replay to start after the GOAL banner fades (~1.4s)
+    game._replayDelay = 1.4;
   }
   function goalCommentary(side, scorer, ownGoal) {
     const hs = game.home.score, as = game.away.score;

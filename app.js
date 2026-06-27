@@ -268,7 +268,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, gfx: '3D', cam: 'Side', chase: 'Off', weather: 'Auto', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, offside: true, gfx: '3D', cam: 'Side', chase: 'Off', weather: 'Auto', sound: true, touch: false },
     mom: 0,                                          // match momentum: -1 (all away) .. +1 (all home)
     weather: 'clear', _ballDecelMul: 1,             // rain → less friction (faster/skiddy ball)
     record: { w: 0, d: 0, l: 0 },
@@ -519,6 +519,7 @@
     $('opt-formation').textContent = game.settings.formation;
     const oa = $('opt-autosub'); if (oa) oa.textContent = game.settings.autoSub ? 'ON' : 'OFF';
     const os = $('opt-setpieces'); if (os) os.textContent = game.settings.setPieces ? 'ON' : 'OFF';
+    const oo = $('opt-offside'); if (oo) oo.textContent = game.settings.offside ? 'ON' : 'OFF';
     const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
     const oc = $('opt-cam'); if (oc) oc.textContent = game.settings.cam || 'Side';
     const och = $('opt-chase'); if (och) och.textContent = game.settings.chase || 'Off';
@@ -690,6 +691,23 @@
   // ============================================================
   // MATCH SETUP
   // ============================================================
+  // per-player attributes — deterministic spread (by team+number) around the team's ratings, so the
+  // squad AVERAGE stays ≈ the team rating (balance preserved) while individuals differ: a quick winger,
+  // a clinical striker, a rock at the back. pace→speed, shoot→shot accuracy, def→tackling.
+  function playerAttrs(t, role, num) {
+    let s = (t.code.charCodeAt(0) * 131 + t.code.charCodeAt(1) * 17 + num * 977) | 0;
+    const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    const sp = a => Math.round((rnd() - 0.5) * 2 * a);
+    const rb = ({ GK:{p:-2,s:-32,d:16}, DEF:{p:-3,s:-15,d:13}, MID:{p:1,s:-2,d:0}, FWD:{p:6,s:11,d:-15} })[role] || { p:0,s:0,d:0 };
+    const pace  = clamp(t.r.PAC + rb.p + sp(7), 40, 99);
+    const shoot = clamp(t.r.ATT + rb.s + sp(7), 28, 99);
+    const def   = clamp(t.r.DEF + rb.d + sp(7), 32, 99);
+    const ovr = role === 'GK'  ? Math.round(t.r.GK * 0.72 + def * 0.28)
+              : role === 'DEF' ? Math.round(def * 0.5 + pace * 0.2 + t.r.MID * 0.2 + shoot * 0.1)
+              : role === 'FWD' ? Math.round(shoot * 0.5 + pace * 0.25 + t.r.MID * 0.15 + def * 0.1)
+              :                  Math.round(t.r.MID * 0.4 + pace * 0.2 + shoot * 0.2 + def * 0.2);
+    return { pace, shoot, def, ovr };
+  }
   function makeTeam(teamId, side, formKey) {
     const t = teamById(teamId);
     const form = FORMATIONS[formKey] || FORMATIONS['4-3-3'];
@@ -702,13 +720,14 @@
       mGoals: 0, mTk: 0, mSv: 0, mSh: 0,           // per-match stats (for Man of the Match)
       ...over,
     });
-    const players = form.map((f, i) => mk({
-      id: side + i, role: f.role, num: f.num, idx: i, name: playerName(teamId, f.num),
+    const withAttrs = (role, num, over) => { const a = playerAttrs(t, role, num); return mk({ ...over, role, num, pace: a.pace, shoot: a.shoot, def: a.def, ovr: a.ovr, speedR: 0.85 + a.pace/100 * 0.32 }); };
+    const players = form.map((f, i) => withAttrs(f.role, f.num, {
+      id: side + i, idx: i, name: playerName(teamId, f.num),
       nx: f.nx, ny: f.ny, isGK: f.role === 'GK', captain: i === captainIdx,
     }));
     const bench = [];
-    for (let j = 0; j < BENCH_SIZE; j++) bench.push(mk({
-      id: side + 'b' + j, role: BENCH_ROLES[j] || 'MID', num: 12 + j, idx: -1, name: playerName(teamId, 12 + j),
+    for (let j = 0; j < BENCH_SIZE; j++) bench.push(withAttrs(BENCH_ROLES[j] || 'MID', 12 + j, {
+      id: side + 'b' + j, idx: -1, name: playerName(teamId, 12 + j),
       nx: 0.5, ny: 0.5, isGK: false, captain: false, onBench: true,
     }));
     return { teamId, side, def: t, score: 0, players, form, formKey, mentality: 'Balanced', bench, subsLeft: SUBS_MAX };
@@ -820,8 +839,9 @@
     ['home','away'].forEach(s => {
       const tm = game[s]; if (!tm || tm.teamId !== c.team) return;
       tm.def = boostedDef(tm.def, c.boosts);
-      const sr = 0.85 + tm.def.r.PAC/100 * 0.32;
-      tm.players.forEach(p => p.speedR = sr); tm.bench.forEach(p => p.speedR = sr);   // PAC investment → quicker legs
+      const bp = c.boosts.PAC || 0, bs = c.boosts.ATT || 0, bd = c.boosts.DEF || 0;   // investment lifts every player's attributes
+      const bump = p => { p.pace = clamp((p.pace||tm.def.r.PAC) + bp, 40, 99); p.shoot = clamp((p.shoot||tm.def.r.ATT) + bs, 28, 99); p.def = clamp((p.def||tm.def.r.DEF) + bd, 32, 99); p.speedR = 0.85 + p.pace/100 * 0.32; };
+      tm.players.forEach(bump); tm.bench.forEach(bump);
     });
   }
   function startMatch(homeId, awayId, mode) {
@@ -1264,6 +1284,7 @@
       case 'subs-auto': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSubs(); break;
       case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
       case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
+      case 'toggle-offside': game.settings.offside = !game.settings.offside; saveStore(); renderSettings(); break;
       case 'toggle-gfx': toggleGfx(); break;
       case 'toggle-cam': toggleCam(); break;
       case 'toggle-chase': toggleChase(); break;
@@ -1846,7 +1867,7 @@
     if (game.tutorial) game.tutorial.passed = true;
   }
   function kickLob(p, tx, ty, skill) {
-    recordPassAttempt(p.side);
+    recordPassAttempt(p.side); markOffside(p.side);
     const b = game.ball, d = len(tx - p.x, ty - p.y), err = (1 - skill) * (d * 0.12 + 1.6);
     const ex = tx + rrange(-err, err), ey = ty + rrange(-err, err);
     const dx = ex - b.x, dy = ey - b.y, n = len(dx, dy) || 1;
@@ -1881,7 +1902,8 @@
     }
     const tx = clamp(CFG.PW/2 + aim * (CFG.goalHalfW - 0.4), CFG.PW/2 - CFG.goalHalfW + 0.3, CFG.PW/2 + CFG.goalHalfW - 0.3);
     const ty = gy;
-    const skill = (acc && acc.shot) || 0.9;
+    const sh = p.shoot || teamObj(side).def.r.ATT;                     // a clinical finisher is more accurate
+    const skill = clamp(((acc && acc.shot) || 0.9) * (0.82 + sh/100 * 0.24), 0.5, 0.99);
     const err = (1 - skill) * 6 + clamp(goalDist/30,0,1) * 1.4;
     const ex = tx + rrange(-err, err), ey = ty + rrange(-1, 1);
     const onT = Math.abs(ex - CFG.PW/2) < CFG.goalHalfW;
@@ -1891,7 +1913,7 @@
   }
   function goalAimedOnTarget(tx) { return Math.abs(tx - CFG.PW/2) < CFG.goalHalfW; }
   function kickTo(p, tx, ty, isShot, skill, opt) {
-    if (!isShot) recordPassAttempt(p.side);
+    if (!isShot) { recordPassAttempt(p.side); markOffside(p.side); }
     const d = len(tx - p.x, ty - p.y);
     const err = (1 - skill) * (d * 0.10 + 1.5);
     // speed chosen so ground friction brings the ball ~to the target (v² = 2·decel·d), slight overhit
@@ -1956,7 +1978,7 @@
     }
     if (!presser || pd > CFG.tackleR) return;
     const diff = DIFFS[game.settings.difficulty];
-    const defR = teamObj(presser.side).def.r.DEF / 100;
+    const defR = (presser.def || teamObj(presser.side).def.r.DEF) / 100;   // a strong tackler wins it more often
     const carR = teamObj(carrier.side).def.r.MID / 100;
     let rate = (0.4 + (defR - 0.6) * 2.0) * (1 - pd / CFG.tackleR);   // ramps up the closer they get
     rate *= clamp(1.15 - (carR - 0.6), 0.6, 1.35);                   // skilled carriers shield better
@@ -2028,8 +2050,10 @@
       if (d2 < bd) { bd = d2; best = p; }
     }
     if (best) {
+      if (best._off && game.settings.offside) { offsideCalled(best); return; }   // an offside player got to the ball → free kick
       b.owner = best.id; b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.shot = false;
       b.trail.length = 0;
+      clearOffside();
       game.lastTouch = best.side; game.lastKicker = null; game.lastTouchPlayer = best.id; game._lastWasShot = false;
       if (game._passSide) { if (best.side === game._passSide && game.passStat) game.passStat[best.side].comp++; game._passSide = null; }   // pass completion
       _prevBall.x = b.x; _prevBall.y = b.y;
@@ -2215,6 +2239,32 @@
   }
   function recordPassAttempt(side) { if (game.passStat) { game.passStat[side].att++; game._passSide = side; } }
 
+  // ----- offside -----
+  function clearOffside() { if (game.home) for (const p of game.home.players) p._off = false; if (game.away) for (const p of game.away.players) p._off = false; }
+  function offsideLineY(defSide) {                    // the 2nd-rearmost defender = the offside line
+    const up = atkUp(otherSide(defSide));             // the attackers attack the goal this side defends
+    const ys = teamObj(defSide).players.map(p => p.y).sort((a, b) => up ? a - b : b - a);   // nearest own goal first
+    return ys.length >= 2 ? ys[1] : (ys[0] != null ? ys[0] : (up ? 0 : CFG.PL));
+  }
+  function markOffside(side) {                        // flag the passing side's players who are in an offside position
+    clearOffside();
+    if (!game.settings.offside || game.matchMode === 'tutorial') return;
+    const up = atkUp(side), b = game.ball, lineY = offsideLineY(otherSide(side)), TOL = 1.6;
+    for (const p of teamObj(side).players) {
+      if (p.isGK) continue;
+      p._off = up ? (p.y < lineY - TOL && p.y < b.y - TOL && p.y < CFG.PL/2)
+                  : (p.y > lineY + TOL && p.y > b.y + TOL && p.y > CFG.PL/2);
+    }
+  }
+  function offsideCalled(p) {                          // an offside player received the ball → free kick the other way
+    clearOffside();
+    game._offsideCount = (game._offsideCount || 0) + 1;
+    showToast('Offside!');
+    if (p.side === 'home') say(pick(['Offside — the flag is up.', 'Caught offside!', "Flag's up. Offside."]));
+    else say(pick(['Offside against them — good defending.', 'They strayed offside.']));
+    freeKick(otherSide(p.side), clamp(p.x, 2, CFG.PW - 2), clamp(p.y, 2, CFG.PL - 2));
+  }
+
   function scoreGoal(side) {
     if (game.matchMode === 'tutorial') {              // celebrate but don't freeze/reset the guided flow
       showBanner('GOAL!'); SFX.goal(); pitchPunch();
@@ -2294,6 +2344,7 @@
   function pitchPunch() { const el = (game.settings.gfx === '3D' && R3D && R3D.ready) ? $('pitch3d') : $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }
 
   function restartAt(toSide, x, y, label, pushBack) {
+    clearOffside();
     const b = game.ball;
     b.x = clamp(x, 0.5, CFG.PW-0.5); b.y = clamp(y, 0.5, CFG.PL-0.5);
     b.vx = 0; b.vy = 0; b.z = 0; b.vz = 0; b.owner = null; b.shot = false; game._lastWasShot = false;
@@ -4448,7 +4499,7 @@
       const t = team.def, col = teamRenderCol(side);
       const head = `<div class="lu-crest" style="background:${col};color:${pickInk(col)}">${t.glyph}</div><div class="lu-tname">${t.name}</div>`;
       const rows = team.players.map(p =>
-        `<div class="lu-row"><span class="lu-num" style="color:${col}">${p.num}</span><span class="lu-pname">${p.name || ('#' + p.num)}</span><span class="lu-pos">${p.role}</span></div>`
+        `<div class="lu-row"><span class="lu-num" style="color:${col}">${p.num}</span><span class="lu-pname">${p.name || ('#' + p.num)}</span><span class="lu-ovr">${p.ovr || ''}</span><span class="lu-pos">${p.role}</span></div>`
       ).join('');
       return `<div class="lu-col">${head}<div class="lu-list">${rows}</div></div>`;
     };

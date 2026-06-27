@@ -1652,14 +1652,59 @@
     return wide && ownerWide && sameSide && ownerAdv;
   }
 
+  // ---- game state awareness ----
+  // returns a tactical context object describing the scoreline / time urgency
+  function gameContext(side) {
+    const us = teamObj(side).score, them = teamObj(otherSide(side)).score;
+    const min = Math.floor(game.clockSec / 60);
+    const late = min >= 75;                                 // final 15 minutes
+    const veryLate = min >= 85;
+    const winning = us > them, losing = us < them, drawing = us === them;
+    const gap = Math.abs(us - them);
+    return { winning, losing, drawing, gap, late, veryLate, min };
+  }
+
+  // ---- defensive line helpers ----
+  // compute the average y of the team's back line so defenders hold a coherent line
+  function defLineY(side) {
+    const players = teamObj(side).players;
+    let sum = 0, count = 0;
+    for (const p of players) {
+      if (p.isGK || p.onBench) continue;
+      if (p.role === 'DEF') { sum += p.y; count++; }
+    }
+    return count > 0 ? sum / count : (atkUp(side) ? CFG.PL * 0.75 : CFG.PL * 0.25);
+  }
+
+  // find the opponent forward nearest to this defender for man-marking
+  function nearestAttacker(p) {
+    const opps = teamObj(otherSide(p.side)).players;
+    let best = null, bd = 1e9;
+    for (const o of opps) {
+      if (o.isGK || o.onBench) continue;
+      if (o.role !== 'FWD' && o.role !== 'MID') continue;
+      const d = dist(p, o);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+
+  // AI dash: give AI players a speed burst when chasing down a counter or making a key run
+  function aiTryDash(p) {
+    if (p.dashT > 0) return;                                // already dashing
+    if ((p.stam || 1) < 0.45) return;                       // too tired
+    p.dashT = CFG.dashDur * 0.8;                            // slightly shorter than human dash
+  }
+
   function aiMove(p, dt) {
     const b = game.ball;
     const owner = playerById(b.owner);
     const team = teamObj(p.side);
     const diff = DIFFS[game.settings.difficulty];
-    const pressMul = (p.side === 'away' && !game._allAI) ? diff.press : 1;   // difficulty only buffs the opponent's press (fair in spectator mode)
+    const pressMul = (p.side === 'away' && !game._allAI) ? diff.press : 1;
     const weHaveBall = owner && owner.side === p.side;
     const form = teamObj(p.side).form;
+    const ctx = gameContext(p.side);
 
     // pass-and-move timer ticks down
     if (p._pnm != null) p._pnm -= dt;
@@ -1667,87 +1712,165 @@
     // formation home, shifted by ball
     const h = homePos(p.side, form[p.idx], p);
     const attackUp = atkUp(p.side);
-    // lateral shift toward ball, vertical shift by phase
     let tx = lerp(h.x, b.x, 0.28);
-    const ballNy = attackUp ? (CFG.PL - b.y) / CFG.PL : b.y / CFG.PL; // 0..1 how advanced the ball is for this team
+    const ballNy = attackUp ? (CFG.PL - b.y) / CFG.PL : b.y / CFG.PL;
     let push = weHaveBall ? 0.16 : -0.12;
     if (p.role === 'FWD') push += weHaveBall ? 0.10 : 0.04;
     if (p.role === 'DEF') push -= weHaveBall ? 0.02 : 0.06;
-    push += (MENTALITY[team.mentality] || 0);                  // coach mentality: how high the side plays
-    if (game._allAI) {                                         // spectator: trailing side commits forward, leader sits in → closer, watchable games
+    push += (MENTALITY[team.mentality] || 0);
+    if (game._allAI) {
       const deficit = teamObj(otherSide(p.side)).score - team.score;
       push += clamp(deficit * 0.07, -0.06, 0.18);
     }
-    push += clamp(momFor(p.side) * 0.085, -0.10, 0.10);   // momentum: the team on top commits forward; the other parks deeper
+    // game-state push: losing late → everyone forward; winning late → sit deep
+    if (ctx.losing && ctx.late) push += 0.08 + (ctx.veryLate ? 0.06 : 0);
+    else if (ctx.winning && ctx.late) push -= 0.06;
+    push += clamp(momFor(p.side) * 0.085, -0.10, 0.10);
     let ny = clamp(form[p.idx].ny + push + (ballNy - 0.5) * 0.5, 0.05, 0.95);
     let ty = attackUp ? CFG.PL * (1 - ny) : CFG.PL * ny;
 
-    // pressing: only the NEAREST defender pressures the ball; the 2nd contains the lane.
-    // 3rd presser also contributes a tracking run on nearby attacks.
     let dx, dy, sprint = 1;
     const closest = (game.tutorial && game.tutorial.passiveOpp && p.side === 'away') ? 99 : teamPressRank(p);
     const gy = attackUp ? CFG.PL : 0;       // own goal y
     const agy = attackUp ? 0 : CFG.PL;      // attacking goal y
 
+    // ---- DEFENSIVE PHASE ----
     if (b.owner == null) {
-      // loose ball: nearest of each side chases
-      if (closest === 0) { dx = b.x + b.vx*0.2 - p.x; dy = b.y + b.vy*0.2 - p.y; sprint = 1.06; }
-      else if (closest === 1 && dist(p, b) < 18) { dx = b.x - p.x; dy = b.y - p.y; sprint = 1.02; }
-      else { dx = tx - p.x; dy = ty - p.y; }
-    } else if (!weHaveBall && closest === 0) {
-      // primary presser — close in GOAL-SIDE and actually challenge for the ball
+      // LOOSE BALL — chase or intercept
+      const ballSpeed = len(b.vx, b.vy);
+      if (closest === 0) {
+        // primary chaser — predict where the ball will be
+        dx = b.x + b.vx*0.25 - p.x; dy = b.y + b.vy*0.25 - p.y; sprint = 1.06;
+        if (dist(p, b) < 10) aiTryDash(p);                 // burst to win the 50-50
+      } else if (closest === 1 && dist(p, b) < 18) {
+        dx = b.x + b.vx*0.1 - p.x; dy = b.y + b.vy*0.1 - p.y; sprint = 1.02;
+      } else if (!b.shot && ballSpeed > 4 && closest <= 5) {
+        // INTERCEPTION: predict where the ball will be in ~0.4s and cut toward it
+        const fx = b.x + b.vx * 0.4, fy2 = b.y + b.vy * 0.4;
+        const intDist = len(fx - p.x, fy2 - p.y);
+        if (intDist < 10 && intDist < dist(p, b)) {
+          dx = fx - p.x; dy = fy2 - p.y; sprint = 1.05;
+        } else { dx = tx - p.x; dy = ty - p.y; }
+      } else { dx = tx - p.x; dy = ty - p.y; }
+
+    } else if (!weHaveBall) {
+      // OPPONENT HAS THE BALL — defensive duties
       const ox = owner.x, oy = owner.y;
-      // angle in from the side so we cut across the dribble path, not just chase behind
-      const gsx = (CFG.PW/2 - ox) * 0.08;
-      dx = (ox + gsx) - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y;
-      sprint = 1.02 * pressMul * (1 + clamp(momFor(p.side), 0, 1) * 0.10);   // momentum → sharper press
-    } else if (!weHaveBall && closest === 1 && dist(p, b) < 28 * pressMul) {
-      // second man — CONTAIN: sit ~5m goal-side, cut the forward lane, don't swarm
-      const ox = owner.x, oy = owner.y;
-      dx = (ox * 0.45 + tx * 0.55) - p.x; dy = (oy + Math.sign(gy - oy) * 5.0) - p.y; sprint = 0.95 * pressMul;
-    } else if (!weHaveBall && closest === 2 && dist(p, b) < 20 * pressMul) {
-      // third defender — track back goal-side at a wider angle, covering the switch
-      const ox = owner.x, oy = owner.y;
-      const mirX = ox < CFG.PW/2 ? CFG.PW * 0.65 : CFG.PW * 0.35;        // cover the far side
-      dx = (mirX * 0.4 + tx * 0.6) - p.x; dy = (oy + Math.sign(gy - oy) * 8.0) - p.y; sprint = 0.92;
+
+      if (closest === 0) {
+        // PRIMARY PRESSER — aggressive challenge
+        const gsx = (CFG.PW/2 - ox) * 0.08;
+        dx = (ox + gsx) - p.x; dy = (oy + Math.sign(gy - oy) * 1.1) - p.y;
+        sprint = 1.02 * pressMul * (1 + clamp(momFor(p.side), 0, 1) * 0.10);
+        // late-game urgency: press harder when losing
+        if (ctx.losing && ctx.late) { sprint *= 1.06; if (dist(p, owner) < 8) aiTryDash(p); }
+      } else if (closest === 1 && dist(p, b) < 28 * pressMul) {
+        // SECOND MAN — contain, cut the forward lane
+        dx = (ox * 0.45 + tx * 0.55) - p.x; dy = (oy + Math.sign(gy - oy) * 5.0) - p.y; sprint = 0.95 * pressMul;
+      } else if (closest === 2 && dist(p, b) < 20 * pressMul) {
+        // THIRD DEFENDER — cover the far side
+        const mirX = ox < CFG.PW/2 ? CFG.PW * 0.65 : CFG.PW * 0.35;
+        dx = (mirX * 0.4 + tx * 0.6) - p.x; dy = (oy + Math.sign(gy - oy) * 8.0) - p.y; sprint = 0.92;
+
+      } else if (p.role === 'DEF') {
+        // DEFENSIVE LINE: hold a coherent back line + track runners
+        const lineAvg = defLineY(p.side);
+        const attacker = nearestAttacker(p);
+        // track an attacker making a dangerous run into our zone
+        if (attacker && dist(p, attacker) < 15 && !attacker.isGK) {
+          const atkAdv = attackUp ? (attacker.y - lineAvg) : (lineAvg - attacker.y);   // positive = behind our line (dangerous)
+          if (atkAdv > 2) {
+            // TRACK THE RUN: stay goal-side of the attacker
+            dx = attacker.x - p.x;
+            dy = (attacker.y + Math.sign(gy - attacker.y) * 2.0) - p.y;
+            sprint = 1.04;
+          } else {
+            // hold the line
+            dx = tx - p.x; dy = lineAvg - p.y;
+          }
+        } else {
+          // no immediate threat — hold the line
+          dx = tx - p.x; dy = lerp(ty, lineAvg, 0.6) - p.y;
+        }
+        // RECOVERY RUN: if the ball is past our line toward our goal, sprint back
+        const ballPastLine = attackUp ? (b.y > lineAvg + 5) : (b.y < lineAvg - 5);
+        if (ballPastLine && dist(p, b) < 30) {
+          dx = b.x * 0.3 + CFG.PW/2 * 0.7 - p.x;          // recover toward the center-back position
+          dy = gy * 0.15 + b.y * 0.85 - p.y;
+          sprint = 1.08;
+          aiTryDash(p);                                      // desperate sprint back
+        }
+
+      } else if (p.role === 'MID' && !weHaveBall) {
+        // MIDFIELD RECOVERY: drop into shape when opponent attacks
+        const ballDeep = attackUp ? (b.y > CFG.PL * 0.6) : (b.y < CFG.PL * 0.4);
+        if (ballDeep && dist(p, b) < 35) {
+          // track back toward the ball, stay goal-side
+          dx = lerp(tx, b.x, 0.3) - p.x;
+          dy = (b.y + Math.sign(gy - b.y) * 6) - p.y;
+          sprint = 1.02;
+        } else {
+          dx = tx - p.x; dy = ty - p.y;
+        }
+
+      } else {
+        // FWD on defence: stay high for the counter unless losing late
+        if (ctx.losing && ctx.late) {
+          // drop back to help defend
+          dx = lerp(tx, b.x, 0.25) - p.x; dy = lerp(ty, b.y, 0.15) - p.y;
+        } else {
+          dx = tx - p.x; dy = ty - p.y;
+        }
+      }
+
+
+    // ---- ATTACKING PHASE ----
     } else if (weHaveBall && p._pnm > 0 && owner && owner.id !== p.id) {
-      // PASS-AND-MOVE: sprint forward into space after passing (one-two potential)
+      // PASS-AND-MOVE: sprint forward after passing
       const fy = attackUp ? -1 : 1;
       const runX = clamp(p.x + p._pnmDir * 15, 4, CFG.PW - 4);
       const runY = clamp(p.y + fy * 12, 2, CFG.PL - 2);
       dx = runX - p.x; dy = runY - p.y; sprint = 1.08;
     } else if (weHaveBall && wantsOverlap(p, owner)) {
-      // OVERLAP RUN: fullback bombs past the winger on the same flank
+      // OVERLAP RUN
       const fy = attackUp ? -1 : 1;
       const wideX = p.x < CFG.PW/2 ? Math.max(2, owner.x - 6) : Math.min(CFG.PW - 2, owner.x + 6);
       dx = wideX - p.x; dy = (owner.y + fy * 10) - p.y; sprint = 1.05;
     } else if (weHaveBall && p.role === 'FWD') {
-      // FORWARD RUNS: make intelligent forward runs, not just hash-based jitter
+      // FORWARD RUNS
       const fy = attackUp ? -1 : 1;
       const runSlot = srandHash(p.idx, b);
+      // game state: winning comfortably → hold position; losing → make aggressive runs
+      const urgency = ctx.losing ? 1.3 : (ctx.winning && ctx.gap >= 2 ? 0.6 : 1.0);
       if (runSlot) {
         // diagonal run behind the defensive line
-        const runBias = ((p.idx * 17) % 3 - 1) * 8;                         // spread runs across the pitch
+        const runBias = ((p.idx * 17) % 3 - 1) * 8;
         const targetX = clamp(b.x + runBias, 6, CFG.PW - 6);
-        const targetY = clamp(b.y + fy * 14, 2, CFG.PL - 2);
+        const targetY = clamp(b.y + fy * (12 * urgency), 2, CFG.PL - 2);
         dx = targetX - p.x; dy = targetY - p.y; sprint = 1.04;
       } else {
-        // check-to-the-ball: come short to offer a safe pass option
+        // check-to-the-ball: come short for a safe outlet
         const safeX = lerp(p.x, b.x, 0.35);
         const safeY = lerp(p.y, b.y, 0.25);
         dx = safeX - p.x; dy = safeY - p.y;
       }
+      // winger near the byline → hold width and sprint to the corner flag for a cross
+      const onWing = p.x < CFG.PW * 0.2 || p.x > CFG.PW * 0.8;
+      const nearByline = attackUp ? (p.y < CFG.PL * 0.12) : (p.y > CFG.PL * 0.88);
+      if (onWing && nearByline && owner && owner.id !== p.id) {
+        const byX = p.x < CFG.PW/2 ? 3 : CFG.PW - 3;
+        const byY = attackUp ? 4 : CFG.PL - 4;
+        dx = byX - p.x; dy = byY - p.y; sprint = 1.05;
+      }
     } else if (weHaveBall && p.role === 'MID') {
-      // MIDFIELD SUPPORT: show for the ball or push into pockets of space
+      // MIDFIELD SUPPORT
       const distToBall = dist(p, b);
       if (distToBall > 22 && owner && owner.role !== 'GK') {
-        // too far — close the gap to offer a passing outlet
         dx = lerp(tx, b.x, 0.35) - p.x; dy = lerp(ty, b.y, 0.25) - p.y; sprint = 1.02;
       } else {
-        // find space between the lines: drift into gaps away from opponents
+        // find space between the lines
         let bestGapX = tx, bestGapY = ty, bestGapD = 0;
         const opps = teamObj(otherSide(p.side)).players;
-        // check 3 candidate positions and pick the one furthest from opponents
         for (let c = 0; c < 3; c++) {
           const cx = clamp(tx + (c - 1) * 10, 5, CFG.PW - 5);
           const cy = ty;
@@ -1757,11 +1880,21 @@
         }
         dx = bestGapX - p.x; dy = bestGapY - p.y;
       }
+    } else if (weHaveBall && p.role === 'DEF') {
+      // DEFENDERS ON THE BALL SIDE: push up when we have possession, hold width
+      // winning late → hold position; losing → be bolder
+      if (ctx.winning && ctx.late) {
+        dx = tx - p.x; dy = ty - p.y;                       // stay home, protect the lead
+      } else {
+        // push up as a unit to compress the pitch
+        const pushY = attackUp ? ty - 4 : ty + 4;
+        dx = tx - p.x; dy = pushY - p.y;
+      }
     } else {
       dx = tx - p.x; dy = ty - p.y;
     }
 
-    // separation from nearby teammates (wider + stronger → players spread out, less clumping)
+    // separation from nearby teammates
     let sx = 0, sy = 0;
     for (const q of team.players) {
       if (q === p || q.isGK) continue;
@@ -1834,8 +1967,6 @@
     p.aiT -= dt;
     if (p.aiT > 0) return;
     const diff = DIFFS[game.settings.difficulty];
-    // away reacts per difficulty; your team-mates react better/worse by the `mate` factor
-    // spectator: both sides react identically (fair); human game: your mates' sharpness scales with `mate`
     p.aiT = (game._allAI ? diff.react : (p.side === 'away' ? diff.react : 0.28 * (2 - diff.mate))) + rrange(0, 0.12);
 
     const attackUp = atkUp(p.side);
@@ -1846,13 +1977,30 @@
     const zone = pitchZone(p);
     const space = spaceAhead(p);
     const counter = isCounterAttack(p);
-    const playerSkill = (p.pace || 50) + ((p.shoot || 50) * 0.3);         // composite skill for dribble decisions
+    const playerSkill = (p.pace || 50) + ((p.shoot || 50) * 0.3);
+    const ctx = gameContext(p.side);
+
+    // ========================
+    // 0. ONE-TOUCH PLAY: pass first-time under extreme pressure in a good position
+    // ========================
+    if (pressNow < 2.2 && zone !== 'own' && p.kickCd <= 0) {
+      const quickTarget = bestPassTarget(p);
+      if (quickTarget && quickTarget.score > 0.40) {
+        // first-time pass — no reaction delay
+        if (!laneClear(p, quickTarget.mate) && dist(p, quickTarget.mate) > 7) {
+          aiLob(p, quickTarget.mate);
+        } else {
+          aiPass(p, quickTarget.mate);
+        }
+        triggerPassAndMove(p);
+        return;
+      }
+    }
 
     // ========================
     // 1. UNDER HEAVY PRESSURE IN OWN THIRD → CLEAR
     // ========================
     if (zone === 'own' && !p.isGK && pressNow < 6.0) {
-      // pressured deep → clear it long downfield; but skilled players try a composed pass first
       if (playerSkill > 90 && pressNow > 3) {
         const safe = bestPassTarget(p);
         if (safe && safe.score > 0.55) { aiPass(p, safe.mate); triggerPassAndMove(p); return; }
@@ -1864,65 +2012,100 @@
     }
 
     // ========================
+    // 1b. WINNING LATE — TIME MANAGEMENT: hold possession, play safe
+    // ========================
+    if (ctx.winning && ctx.late && zone !== 'final') {
+      // keep the ball: prefer short safe passes, rarely shoot, don't risk through-balls
+      const safe = bestPassTarget(p);
+      if (safe && safe.score > 0.35 && pressNow < 4) {
+        aiPass(p, safe.mate);
+        return;                                            // no pass-and-move: stay compact
+      }
+      // if no safe pass, hold the ball and shield
+      if (pressNow > 3) {
+        p.aiT = 0.40 + rrange(0, 0.2);
+        aiDribbleSkill(p);
+        return;
+      }
+    }
+
+    // ========================
     // 2. COUNTER-ATTACK: RUN WITH THE BALL IF SPACE IS OPEN
     // ========================
     if (counter && (p.role === 'FWD' || p.role === 'MID') && pressNow > 3.5) {
-      // carry the ball forward at speed — don't pass, exploit the space
-      p.aiT = 0.30 + rrange(0, 0.15);                     // re-evaluate soon but not instantly
+      p.aiT = 0.30 + rrange(0, 0.15);
       aiDribbleForward(p);
+      aiTryDash(p);                                        // speed burst on the counter
       return;
     }
 
     // ========================
-    // 3. SHOOT: consider shots from inside the zone
+    // 3. SHOOT
     // ========================
     const inRange = goalDist < 30 && (attackUp ? p.y < CFG.PL*0.58 : p.y > CFG.PL*0.42);
     if (inRange) {
       let sp = 0.22 + (t.r.ATT/100)*0.35 - goalDist/50;
-      if (pressNow < 3) sp += 0.22;                        // under close pressure → panic shot
-      if (pressNow > 8) sp -= 0.12;                        // lots of time → look for a better option
-      if (zone === 'final' && goalDist < 16) sp += 0.18;   // prime scoring zone
-      if (p.shoot && p.shoot > 70) sp += 0.10;             // clinical finishers pull the trigger
+      if (pressNow < 3) sp += 0.22;
+      if (pressNow > 8) sp -= 0.12;
+      if (zone === 'final' && goalDist < 16) sp += 0.18;
+      if (p.shoot && p.shoot > 70) sp += 0.10;
+      if (ctx.losing && ctx.veryLate) sp += 0.15;         // desperate: shoot more when losing late
       sp = clamp(sp, 0.08, 0.88);
       if (srand() < sp) { aiShoot(p); return; }
     }
 
     // ========================
-    // 4. HOLD & DRIBBLE: skilled players carry the ball when space exists
+    // 3b. CROSS FROM THE WING: winger near the byline delivers into the box
+    // ========================
+    const onWing = p.x < CFG.PW * 0.22 || p.x > CFG.PW * 0.78;
+    const nearByline = attackUp ? (p.y < CFG.PL * 0.15) : (p.y > CFG.PL * 0.85);
+    if (onWing && nearByline && (p.role === 'FWD' || p.role === 'MID')) {
+      // find a teammate in the box to cross to
+      const crossTarget = findCrossTarget(p);
+      if (crossTarget) {
+        aiCross(p, crossTarget);
+        return;
+      }
+    }
+
+    // ========================
+    // 4. HOLD & DRIBBLE
     // ========================
     if (space > 8 && pressNow > 3.5 && p.role !== 'DEF') {
-      // probability of choosing to dribble scales with player skill + space
-      const dribChance = clamp(0.25 + (playerSkill - 60) / 200 + (space - 8) / 60, 0.10, 0.70);
+      let dribChance = clamp(0.25 + (playerSkill - 60) / 200 + (space - 8) / 60, 0.10, 0.70);
+      if (ctx.losing && ctx.late) dribChance += 0.12;      // more urgency → take more risks
       if (srand() < dribChance) {
-        p.aiT = 0.35 + rrange(0, 0.20);                   // hold the ball for a beat, then re-evaluate
+        p.aiT = 0.35 + rrange(0, 0.20);
         aiDribbleForward(p);
         return;
       }
     }
 
     // ========================
-    // 5. THROUGH BALL: AI can now play through-balls and lobs
+    // 5. THROUGH BALL
     // ========================
-    const throughTarget = aiFindThroughBall(p);
-    if (throughTarget) {
-      aiThroughBall(p, throughTarget);
-      triggerPassAndMove(p);
-      return;
+    if (!(ctx.winning && ctx.late)) {                      // don't play risky through-balls when protecting a lead
+      const throughTarget = aiFindThroughBall(p);
+      if (throughTarget) {
+        aiThroughBall(p, throughTarget);
+        triggerPassAndMove(p);
+        return;
+      }
     }
 
     // ========================
-    // 6. PASS: find the best teammate
+    // 6. PASS
     // ========================
     const best = bestPassTarget(p);
     if (best) {
-      // pass threshold depends on pressure and zone
       let threshold = 0.45;
-      if (zone === 'own') threshold = 0.30;                // in own third, pass earlier (don't dwell)
-      if (zone === 'final') threshold = 0.55;              // in final third, be more selective (hold for a better option)
-      if (pressNow < 2.6) threshold = -1;                  // extreme pressure → must offload
+      if (zone === 'own') threshold = 0.30;
+      if (zone === 'final') threshold = 0.55;
+      if (pressNow < 2.6) threshold = -1;
+      // losing late → be more aggressive with forward passes
+      if (ctx.losing && ctx.late) threshold -= 0.10;
 
       if (best.score > threshold) {
-        // lob over blocked lane (AI can now chip)
         if (!laneClear(p, best.mate) && dist(p, best.mate) > 7) {
           aiLob(p, best.mate);
         } else {
@@ -1934,9 +2117,41 @@
     }
 
     // ========================
-    // 7. DRIBBLE: no good pass, carry the ball with intent
+    // 7. DRIBBLE: no good pass, carry with intent
     // ========================
     aiDribbleSkill(p);
+  }
+
+  // find a teammate in the box for a cross delivery
+  function findCrossTarget(p) {
+    const attackUp = atkUp(p.side);
+    const mates = teamObj(p.side).players;
+    let best = null, bs = -1;
+    for (const m of mates) {
+      if (m === p || m.isGK) continue;
+      // must be in or near the box (central, advanced)
+      const inBox = Math.abs(m.x - CFG.PW/2) < CFG.boxW/2;
+      const advanced = attackUp ? (m.y < CFG.PL * 0.18) : (m.y > CFG.PL * 0.82);
+      if (!inBox || !advanced) continue;
+      const open = clamp(nearestOppToPoint(m, p.side) / 6, 0, 1);
+      const d = dist(p, m);
+      if (d < 8 || d > 40) continue;
+      const score = open * 0.6 + (m.role === 'FWD' ? 0.3 : 0.1) + (m.shoot ? m.shoot / 300 : 0);
+      if (score > bs) { bs = score; best = m; }
+    }
+    return (best && bs > 0.35) ? best : null;
+  }
+
+  // deliver a cross into the box (lofted ball toward the target)
+  function aiCross(p, target) {
+    const diff = DIFFS[game.settings.difficulty];
+    const skill = (game._allAI || p.side === 'away') ? diff.pass * 0.95 : clamp(0.85 * diff.mate, 0.55, 0.97);
+    const fy = atkUp(p.side) ? -1 : 1;
+    // aim slightly ahead of the target into the box
+    const tx = lerp(target.x, CFG.PW/2, 0.15);             // pull toward center of goal
+    const ty = target.y + fy * 2 + target.vy * 0.3;
+    kickLob(p, tx, ty, skill);
+    say(pick(['Swings it in!', 'Cross into the box!', 'Delivery from the wing!', 'Whips it in!']));
   }
 
   // intelligent dribbling toward the attacking goal with defender avoidance
@@ -2660,6 +2875,10 @@
     else bank.push(`Still goalless, but plenty of intent.`, `No breakthrough yet.`);
     if (min >= 80) bank.push(`Into the final stretch — tension rising.`, `Squeaky-bum time, this.`, trail ? `The clock is the enemy for ${trail.name}.` : `Big finish brewing.`);
     else if (min <= 8) bank.push(`Bright start to this one.`, `Sides feeling each other out early.`);
+    // tactical awareness commentary
+    if (lead && gap === 1 && min >= 75) bank.push(`${lead.name} sitting deeper now, protecting the lead.`, `${trail.name} throwing everything forward.`, `You can feel the urgency from ${trail.name}.`);
+    if (lead && gap >= 2 && min >= 60) bank.push(`${lead.name} keeping the ball well — running down the clock.`, `${trail.name} chasing shadows at this point.`);
+    if (!lead && min >= 85) bank.push(`We're heading for a draw unless someone produces something.`, `A point each — is anyone going to snatch it?`);
     return pick(bank);
   }
   function pitchPunch() { const el = (game.settings.gfx === '3D' && R3D && R3D.ready) ? $('pitch3d') : $('pitch'); if (!el) return; el.classList.remove('punch'); void el.offsetWidth; el.classList.add('punch'); }

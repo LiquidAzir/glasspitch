@@ -353,6 +353,7 @@
     else if (id === 'cup') renderCup();
     else if (id === 'league') renderLeague();
     else if (id === 'career') renderCareer();
+    else if (id === 'worldcup') renderWorldCup();
     else if (id === 'career-news') renderCareerNews();
     else if (id === 'career-transfers') renderTransfers();
     else if (id === 'shootout') { drawPen(); penInstr(); }
@@ -387,6 +388,7 @@
       if (s.cup && s.cup.rounds) game.cup = s.cup;
       if (s.league && s.league.fixtures) { game.league = s.league; migrateLeague(game.league); }
       if (s.career && s.career.cur) { game.career = s.career; migrateCareer(game.career); }
+      if (s.worldcup && s.worldcup.groups) game.worldcup = s.worldcup;
     } catch (e) {}
   }
   // backfill fields added in the seasons-expansion so pre-update saves don't crash
@@ -419,6 +421,7 @@
         cup: game.cup || null,
         league: game.league || null,
         career: game.career || null,
+        worldcup: game.worldcup || null,
       }));
     } catch (e) {}
   }
@@ -479,7 +482,7 @@
       game.tutorial = null; game.dashCdUntil = 0; game.ticker = null;
       setupPitchGeom(); drawStaticPitch(); paintScoreboard();
       _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
-      game.history = [snap.matchMode === 'cup' ? 'cup' : (snap.matchMode === 'league' || snap.matchMode === 'leagueCup') ? 'league' : (snap.matchMode === 'career' || snap.matchMode === 'careerCup') ? 'career' : 'title'];
+      game.history = [snap.matchMode === 'cup' ? 'cup' : (snap.matchMode === 'league' || snap.matchMode === 'leagueCup') ? 'league' : (snap.matchMode === 'career' || snap.matchMode === 'careerCup') ? 'career' : (snap.matchMode === 'worldcup' || snap.matchMode === 'worldcupKO') ? 'worldcup' : 'title'];
       return true;
     } catch (e) { return false; }
   }
@@ -503,7 +506,7 @@
       if (has) {
         const hc = teamById(snap.home.teamId).code, ac = teamById(snap.away.teamId).code;
         const mins = Math.min(90, Math.floor((snap.clockSec || 0) / 60));
-        const modeLabel = { league:'League', career:'Career', cup:'Cup', leagueCup:'League Cup', careerCup:'Cup', watch:'Watch' }[snap.matchMode] || '';
+        const modeLabel = { league:'League', career:'Career', cup:'Cup', leagueCup:'League Cup', careerCup:'Cup', worldcup:'World Cup', worldcupKO:'World Cup', watch:'Watch' }[snap.matchMode] || '';
         const tag = modeLabel ? modeLabel + ' · ' : '';
         cont.textContent = `▶ Continue · ${tag}${hc} ${snap.home.score}–${snap.away.score} ${ac}  ${mins}'`;
       }
@@ -572,12 +575,12 @@
   }
   function renderTeamSelect() {
     const ts = game.ts;
-    const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career' || ts.mode === 'rehire';
+    const tour = ts.mode === 'cup' || ts.mode === 'league' || ts.mode === 'career' || ts.mode === 'rehire' || ts.mode === 'worldcup';
     const watch = ts.mode === 'watch';
     const shoot = ts.mode === 'shootout';
-    $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : ts.mode === 'rehire' ? 'Take a New Job' : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
-    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ts.mode === 'rehire' ? 'NEW JOB' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : ts.mode === 'rehire' ? 'Take the Job' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
+    $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : ts.mode === 'rehire' ? 'Take a New Job' : ts.mode === 'worldcup' ? 'Pick Your Nation' : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
+    $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ts.mode === 'worldcup' ? 'WORLD CUP' : ts.mode === 'rehire' ? 'NEW JOB' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : ts.mode === 'worldcup' ? 'Enter World Cup' : ts.mode === 'rehire' ? 'Take the Job' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
     $('ts-random').classList.toggle('hidden', tour || watch || shoot || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
@@ -602,6 +605,7 @@
   function tsConfirm() {
     const ts = game.ts;
     if (ts.mode === 'cup') { ts.mode = null; startCup(TEAMS[ts.idx].id); return; }
+    if (ts.mode === 'worldcup') { ts.mode = null; startWorldCup(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'league') { ts.mode = null; startLeague(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'career') { ts.mode = null; startCareer(TEAMS[ts.idx].id); return; }
     if (ts.mode === 'rehire') { ts.mode = null; careerRehire(TEAMS[ts.idx].id); return; }
@@ -1181,6 +1185,12 @@
       case 'goto-cup': if (game.cup) navigateTo('cup'); else startNewCupFlow(); break;
       case 'cup-play': cupPlay(); break;
       case 'cup-new': startNewCupFlow(); break;
+      case 'goto-worldcup': if (game.worldcup) navigateTo('worldcup'); else startNewWorldCupFlow(); break;
+      case 'worldcup-advance': if (game.worldcup.stage === 'group') worldcupPlay(); else worldcupKOPlay(); break;
+      case 'worldcup-watch': if (game.worldcup.stage === 'group') worldcupPlay(); else worldcupKOPlay(); enterWatch(); break;
+      case 'worldcup-tab-groups': game.worldcup.tab = 'groups'; renderWorldCup(); break;
+      case 'worldcup-tab-bracket': game.worldcup.tab = 'bracket'; renderWorldCup(); break;
+      case 'worldcup-new': startNewWorldCupFlow(); break;
       case 'goto-league': if (game.league) navigateTo('league'); else startNewLeagueFlow(); break;
       case 'league-play': leaguePlay(); break;
       case 'league-cup-play': leagueCupPlay(); break;
@@ -1257,7 +1267,7 @@
       case 'toggle-chase': toggleChase(); break;
       case 'cycle-weather': cycleWeather(); break;
       case 'resume-second': startSecondHalf(); break;
-      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; break; }
+      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; else if (m === 'worldcup' || m === 'worldcupKO') game.history = ['worldcup']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
       case 'quit-title': exitWatch(false); saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
     }
@@ -2290,6 +2300,8 @@
     SFX.whistle();
     if (game.matchMode === 'cup') { onCupMatchEnd(); return; }
     if (game.matchMode === 'leagueCup' || game.matchMode === 'careerCup') { onSeasonCupMatchEnd(); return; }
+    if (game.matchMode === 'worldcup') { onWorldCupMatchEnd(); return; }
+    if (game.matchMode === 'worldcupKO') { onWorldCupKOMatchEnd(); return; }
     if (game.matchMode === 'league') { onLeagueMatchEnd(); return; }
     if (game.matchMode === 'career') { onCareerMatchEnd(); return; }
     if (!wasWatch) {                               // a spectated friendly doesn't touch your record
@@ -2435,11 +2447,133 @@
     if (cw) cw.classList.toggle('hidden', done);
   }
 
+  // ============================================================
+  // WORLD CUP — 2 groups of 4 → group stage → semis → final
+  // ============================================================
+  function startNewWorldCupFlow() {
+    game.ts.mode = 'worldcup'; game.ts.step = 0;
+    game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+    navigateTo('team-select');
+  }
+  function startWorldCup(youId) {
+    _seed = (Date.now() & 0x7fffffff) ^ 0x3c0ffee1;
+    const others = shuffle(TEAMS.map(t => t.id).filter(id => id !== youId));
+    const groups = [shuffle([youId, others[0], others[1], others[2]]), shuffle([others[3], others[4], others[5], others[6]])];
+    const fixtures = groups.map(g => roundRobin(g));                         // each group: 3 matchdays of 2 matches
+    const results = fixtures.map(f => f.map(rd => rd.map(() => null)));
+    game.worldcup = { you: youId, groups, fixtures, results, round: 0, stage: 'group', cup: null, champion: null, tab: 'groups' };
+    game.ts.you = youId; saveStore();
+    navigateTo('worldcup', { addToHistory: false }); game.history = ['title'];
+    renderWorldCup('Group stage — the top 2 of each group reach the semi-finals.');
+  }
+  function wcMyGroup() { const w = game.worldcup; return w.groups[0].includes(w.you) ? 0 : 1; }
+  function wcMyFixture() {
+    const w = game.worldcup, gi = wcMyGroup(), rd = w.fixtures[gi][w.round];
+    for (let i = 0; i < rd.length; i++) if (rd[i][0] === w.you || rd[i][1] === w.you) return { gi, idx: i, pair: rd[i] };
+    return null;
+  }
+  function worldcupPlay() {
+    const w = game.worldcup; if (!w || w.stage !== 'group') return;
+    const f = wcMyFixture(); if (!f || w.results[f.gi][w.round][f.idx]) return;
+    const opp = f.pair[0] === w.you ? f.pair[1] : f.pair[0];
+    startMatch(w.you, opp, 'worldcup'); game.history = ['worldcup'];
+    startRoundTicker(w.fixtures[f.gi][w.round], f.idx);
+  }
+  function onWorldCupMatchEnd() {
+    const w = game.worldcup, f = wcMyFixture(), ys = game.home.score, os = game.away.score;
+    w.results[f.gi][w.round][f.idx] = f.pair[0] === w.you ? [ys, os] : [os, ys];
+    const fin = game.ticker && game.ticker.finals;
+    [0, 1].forEach(gi => {                                                   // sim the rest of this matchday in both groups
+      const rd = w.fixtures[gi][w.round];
+      for (let i = 0; i < rd.length; i++) {
+        if (w.results[gi][w.round][i] || (gi === f.gi && i === f.idx)) continue;
+        w.results[gi][w.round][i] = (gi === f.gi && fin && fin[i]) || simMatch(rd[i][0], rd[i][1]).score;
+      }
+    });
+    game.ticker = null;
+    let msg;
+    if (w.round >= w.fixtures[0].length - 1) { startWorldCupKnockout(); msg = w._koMsg; }
+    else { w.round++; msg = (ys > os ? 'Win! ' : ys === os ? 'Draw. ' : 'Lost. ') + `Group matchday ${w.round + 1}.`; }
+    saveStore();
+    navigateTo('worldcup', { addToHistory: false }); game.history = ['title'];
+    renderWorldCup(msg + (game.motm ? '  ' + motmLine() : ''));
+  }
+  function startWorldCupKnockout() {
+    const w = game.worldcup;
+    const tA = computeTable({ teams: w.groups[0], fixtures: w.fixtures[0], results: w.results[0] });
+    const tB = computeTable({ teams: w.groups[1], fixtures: w.fixtures[1], results: w.results[1] });
+    const A1 = tA[0].id, A2 = tA[1].id, B1 = tB[0].id, B2 = tB[1].id;
+    w.cup = { you: w.you, rounds: [[A1, B2, B1, A2]], scores: [new Array(2).fill(null)], round: 0, alive: true, champion: null };  // SF: A1vB2, B1vA2
+    w.stage = 'knockout'; w.tab = 'bracket';
+    if (![A1, A2, B1, B2].includes(w.you)) {                                  // you didn't qualify → sim it out
+      w.cup.alive = false; autoCompleteCupC(w.cup); w.champion = w.cup.champion; w.stage = 'done';
+      w._koMsg = `Group stage over — you didn't qualify. ${teamById(w.champion).code} lifted the trophy.`;
+    } else { w._koMsg = 'Top of the group business done — through to the SEMI-FINALS! 🌍'; }
+  }
+  function worldcupKOPlay() {
+    const w = game.worldcup, c = w && w.cup; if (!c || !c.alive || c.champion) return;
+    const opp = cupOpponentC(c); if (!opp) return;
+    startMatch(w.you, opp, 'worldcupKO'); game.history = ['worldcup'];
+  }
+  function onWorldCupKOMatchEnd() {
+    const w = game.worldcup, hs = game.home.score, as = game.away.score, youId = game.home.teamId, oppId = game.away.teamId;
+    if (hs === as) { startShootout(youId, oppId, 'worldcupKO'); return; }
+    finishWorldCupKO(hs > as ? youId : oppId);
+  }
+  function finishWorldCupKO(winnerId) {
+    const w = game.worldcup, c = w.cup, youWon = winnerId === c.you;
+    resolveCupC(c, winnerId);
+    if (!c.alive && !c.champion) autoCompleteCupC(c);
+    if (c.champion) { w.champion = c.champion; w.stage = 'done'; }
+    saveStore();
+    let msg;
+    if (c.champion === c.you) msg = '🏆 🌍 WORLD CUP CHAMPIONS! You did it!';
+    else if (c.champion) msg = `${teamById(c.champion).code} are World Cup winners.`;
+    else if (!c.alive) msg = 'Knocked out of the World Cup.';
+    else msg = youWon ? `Into the ${roundName(c.rounds[c.round].length)}!` : '';
+    navigateTo('worldcup', { addToHistory: false }); game.history = ['title'];
+    w.tab = 'bracket'; renderWorldCup(msg);
+  }
+  function wcGroupTableHTML(so, youId) {
+    const table = computeTable(so);
+    let h = `<div class="lg-row lg-head"><span class="lg-pos">#</span><span class="lg-team">Team</span><span>P</span><span>W</span><span>D</span><span>L</span><span>GD</span><span class="lg-pts">Pts</span></div>`;
+    table.forEach((t, i) => {
+      const you = t.id === youId ? ' you-row' : '', qual = i < 2 ? ' wc-qual' : '';
+      h += `<div class="lg-row${you}${qual}"><span class="lg-pos">${i+1}</span><span class="lg-team"><span class="ct-dot" style="background:${teamById(t.id).col}"></span>${teamById(t.id).code}</span><span>${t.P}</span><span>${t.W}</span><span>${t.D}</span><span>${t.L}</span><span>${t.GD>0?'+':''}${t.GD}</span><span class="lg-pts">${t.Pts}</span></div>`;
+    });
+    return h;
+  }
+  function renderWorldCup(status) {
+    const w = game.worldcup; if (!w) return;
+    w.tab = w.tab || 'groups';
+    $('wc-stage').textContent = w.stage === 'group' ? `Group stage · MD ${w.round+1}/3` : w.stage === 'done' ? 'Complete' : 'Knockouts';
+    ['groups','bracket'].forEach(t => { const el = document.querySelector(`[data-action="worldcup-tab-${t}"]`); if (el) el.classList.toggle('on', t === w.tab); });
+    const host = $('wc-content'), gi = wcMyGroup();
+    if (w.tab === 'bracket') host.innerHTML = w.cup ? `<div class="cup-bracket">${cupBracketHTML(w.cup)}</div>` : `<p class="cr-empty">The knockout bracket is drawn once the group stage ends.</p>`;
+    else host.innerHTML = [0,1].map(gx => {
+      const so = { teams: w.groups[gx], fixtures: w.fixtures[gx], results: w.results[gx] };
+      return `<div class="wc-group-head">Group ${gx===0?'A':'B'}${gx===gi?' · your group':''}</div><div class="league-table wc-group">${wcGroupTableHTML(so, w.you)}</div>`;
+    }).join('');
+    if (status != null) $('wc-status').textContent = status;
+    const pl = $('worldcup-play'), wt = $('worldcup-watch');
+    if (w.stage === 'done') { pl.classList.add('hidden'); if (wt) wt.classList.add('hidden'); return; }
+    if (w.stage === 'group') {
+      const f = wcMyFixture(), opp = f ? (f.pair[0] === w.you ? f.pair[1] : f.pair[0]) : null;
+      pl.classList.remove('hidden'); pl.textContent = opp ? `Play · ${teamById(w.you).code} v ${teamById(opp).code}` : 'Play Match';
+      if (wt) wt.classList.remove('hidden');
+    } else {
+      const c = w.cup, on = c && c.alive && !c.champion;
+      pl.classList.toggle('hidden', !on);
+      if (on) pl.textContent = `Play · ${roundName(c.rounds[c.round].length)} v ${teamById(cupOpponentC(c)).code}`;
+      if (wt) wt.classList.toggle('hidden', !on);
+    }
+  }
+
   // ----- penalty shootout -----
   const PEN_ZONES = 3;
   function startShootout(youId, oppId, ctx) {
     // ctx: true/'standalone' = menu shootout, 'leagueCup'/'careerCup' = season cup tie, else the standalone Cup
-    const c2 = (ctx === true || ctx === 'standalone') ? 'standalone' : (ctx === 'leagueCup' || ctx === 'careerCup') ? ctx : 'cup';
+    const c2 = (ctx === true || ctx === 'standalone') ? 'standalone' : (ctx === 'leagueCup' || ctx === 'careerCup' || ctx === 'worldcupKO') ? ctx : 'cup';
     game.penalty = { you: youId, opp: oppId, hs: 0, as: 0, hk: 0, ak: 0, turn: 'home', phase: 'aim', aim: 1, result: null, winner: null, histH: [], histA: [], _standalone: c2 === 'standalone', _ctx: c2 };
     navigateTo('shootout', { addToHistory: false });
     game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't auto-advance the aim
@@ -2504,6 +2638,7 @@
     let fn;
     if (ctx === 'leagueCup') fn = () => finishSeasonCupMatch(game.league.cup, winnerId, true);
     else if (ctx === 'careerCup') fn = () => finishSeasonCupMatch(game.career.cur.cup, winnerId, false);
+    else if (ctx === 'worldcupKO') fn = () => finishWorldCupKO(winnerId);
     else fn = () => finishCupMatch(winnerId);
     if (game._penFast) fn(); else setTimeout(fn, 1700);
   }
@@ -4325,6 +4460,8 @@
       // testing: end the on-screen match with a given scoreline (drives season/cup result handlers)
       finishMatch: (hs, as) => { if (!game.home) return false; game.home.score = hs|0; game.away.score = as|0; game.clockSec = HALF_SIM * 2; game.half = 2; goFulltime(); return true; },
       careerCupPlay: () => careerCupPlay(), leagueCupPlay: () => leagueCupPlay(),
+      startWorldCup: (you) => startWorldCup(you || TEAMS[0].id), worldcup: () => game.worldcup,
+      worldcupPlay: () => { game.worldcup.stage === 'group' ? worldcupPlay() : worldcupKOPlay(); },
       render,
     };
   }

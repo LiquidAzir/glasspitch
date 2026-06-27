@@ -6,7 +6,7 @@
   <title>Glass Pitch</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=62">
+  <link rel="stylesheet" href="styles.css?v=63">
 </head>
 <body>
   <div id="app">
@@ -324,7 +324,36 @@
             <div class="tourn-desc">Full home-and-away season — face every club twice, chase the title, and a knockout Cup runs alongside for a shot at the Double.</div>
           </div>
         </button>
+        <button class="tourn-card focusable" data-action="goto-worldcup">
+          <div class="tourn-ic">🌍</div>
+          <div class="tourn-info">
+            <div class="tourn-name">World Cup</div>
+            <div class="tourn-desc">Two groups of four → a group stage, then the top two of each group fight through the semi-finals to the final.</div>
+          </div>
+        </button>
       </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- WORLD CUP (groups → knockouts)                                -->
+    <!-- ============================================================ -->
+    <div id="worldcup" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <h1>World Cup</h1>
+        <span class="header-meta" id="wc-stage">Group stage</span>
+      </header>
+      <div class="career-tabs">
+        <button class="cr-tab focusable on" data-action="worldcup-tab-groups">Groups</button>
+        <button class="cr-tab focusable" data-action="worldcup-tab-bracket">Bracket</button>
+      </div>
+      <div class="content" id="wc-content"></div>
+      <p class="cup-status" id="wc-status"></p>
+      <nav class="cup-actions">
+        <button class="ts-confirm focusable" data-action="worldcup-advance" id="worldcup-play">Play Match</button>
+        <button class="title-btn focusable" data-action="worldcup-watch" id="worldcup-watch">👁 Watch</button>
+        <button class="title-btn focusable" data-action="worldcup-new" id="worldcup-new">New World Cup</button>
+      </nav>
     </div>
 
     <!-- ============================================================ -->
@@ -508,6 +537,6 @@
     </div>
     <button class="touch-btn touch-pinch" data-touch-key="Enter" aria-label="Action / switch">●</button>
   </div>
-  <script src="app.js?v=62"></script>
+  <script src="app.js?v=63"></script>
 </body>
 </html>

@@ -4161,6 +4161,7 @@
   // ============================================================
   let cv, ctx, pitchCv, pitchCtx, geom;
   let cv3d = null, R3D = null, _threeLoading = false, _webglOK = null;
+  const P3D_SCALE = 1.26;   // 3D player size multiplier — a touch bigger so the action reads clearly on the glasses
   function setupRender() {
     cv = $('pitch'); ctx = cv.getContext('2d');
     pitchCv = document.createElement('canvas'); pitchCv.width = 600; pitchCv.height = 600;
@@ -4552,7 +4553,7 @@
         S.legs.setMatrixAt(2*i, HIDE); S.legs.setMatrixAt(2*i+1, HIDE); S.arms.setMatrixAt(2*i, HIDE); S.arms.setMatrixAt(2*i+1, HIDE);
         continue;
       }
-      const sc = p.isGK ? 1.12 : 1;
+      const sc = (p.isGK ? 1.12 : 1) * P3D_SCALE;
       const sp = len(p.vx, p.vy), moving = sp > 0.4;
       const s = moving ? Math.sin(p.runPhase) : 0;
       const amp = moving ? clamp(sp * 0.09, 0.16, 0.7) : 0;     // longer strides the faster you run

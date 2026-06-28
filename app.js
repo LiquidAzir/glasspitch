@@ -1469,10 +1469,18 @@
     const curValid = cur && !cur.isGK && cur.side === 'home';
     const best = bestChallenger();
     if (!curValid) { if (best) game.activeId = best.id; return; }               // no valid player → must re-pick
-    // NEVER pull control off the player you're actively steering, just manually switched to, or
-    // receiving a pass with — so a swipe is never hijacked mid-move.
     const now = performance.now() / 1000;
     const steering = (now - game.lastSteerT) < CFG.steerHold;
+    // POSSESSION LOST: the opponent now has the ball (e.g. a pass was intercepted, or a
+    // tackle won it). Abandon a stale pass-follow / manual-switch lock so control returns
+    // to the best-placed defender instead of being stranded on a far-away player. An
+    // ACTIVE steer is always respected (we never yank a player out from under your swipe).
+    if (owner && owner.side === 'away' && !steering && best && cur &&
+        best.id !== game.activeId && dist(cur, b) > dist(best, b) + CFG.switchHyst) {
+      game._recvUntil = 0; game.activeLockT = 0; game.activeId = best.id; return;
+    }
+    // NEVER pull control off the player you're actively steering, just manually switched to,
+    // or receiving a pass with — so a swipe is never hijacked mid-move.
     if (steering || game.activeLockT > 0 || (game._recvUntil && now < game._recvUntil)) return;
     // Idle on defence / loose ball → keep the marker on the action: hand control to a clearly
     // better-placed challenger so your player is never stranded far from the ball (hysteresis stops flicker).
@@ -2371,7 +2379,11 @@
     } else {
       kickTo(p, mate.x + mate.vx * 0.30, mate.y + mate.vy * 0.30, false, 0.97);
     }
-    setActive(mate.id, true);
+    // Follow the receiver via the soft receive-window — NOT a hard lock. A hard lock
+    // would strand control on the intended receiver for ~1.4s even when the pass is
+    // intercepted or never reaches them; the receive-window yields the moment the
+    // opponent wins it (see chooseActive), so control snaps back to a real defender.
+    setActive(mate.id);
     game._recvUntil = performance.now() / 1000 + 1.5;   // the receiver runs onto the pass (so it connects + control stays on them)
     if (game.tutorial) game.tutorial.passed = true;
   }

@@ -29,12 +29,19 @@
     controlDist: 1.15, captureR: 1.45, tackleR: 2.1, captureSpeed: 19,
     // ball arc (height) — mostly visual; gates capture & "over the bar"
     ballGravity: 12, crossbarH: 2.44, catchH: 2.5,
-    // sprint / dash
-    dashDur: 0.42, dashCd: 2.4, dashBoost: 1.7,
+    // sprint — contextual auto-sprint governed by a stamina meter (no gesture).
+    // Your controlled player surges in the moments you'd obviously want to: racing a
+    // loose ball, breaking into space with it, or recovering as the last man back.
+    sprintMul: 1.36,            // sustained sprint speed multiplier (vs normal running)
+    sprintDrain: 0.36,         // sprint energy spent per second while sprinting (~2.8s from full)
+    sprintRegen: 0.21,         // sprint energy recovered per second when not sprinting (~4.8s to full)
+    sprintMin: 0.24,           // need this much energy to kick off a fresh sprint → meatier bursts, no on/off stutter when chasing continuously
+    // dash burst — short instant boost the AI uses for 50-50s / recovery runs
+    dashDur: 0.42, dashBoost: 1.7,
     // Timing
     steerHold: 0.75,            // s a manual swipe overrides defensive auto-seek
     switchHyst: 6,              // m the nearest challenger must be closer to the ball before idle control hands over (anti-flicker)
-    comboWindow: 700, minComboGap: 45, dashWindow: 360,   // dashWindow: max ms between the two same-direction swipes that trigger a sprint (a touch forgiving for on-device swipe latency)
+    comboWindow: 700, minComboGap: 45,
     goalCelebrate: 2.0, restartPause: 0.35,
     // HUD
     hudHz: 12,
@@ -278,7 +285,7 @@
     clockSec: 0, half: 1, phase: 'play',
     phaseT: 0, kickoffTeam: 'away',
     lastTouch: 'away', lastKicker: null, lastTouchPlayer: null,
-    dashCdUntil: 0, _lastWasShot: false,
+    _lastWasShot: false,
     poss: { home: 0, away: 0 },
     stats: null,
     effects: [],
@@ -485,7 +492,7 @@
       resetMatchStats();
       game.effects = []; game.banner = ''; game.netRipple = { home: 0, away: 0 };
       game.steer = { x: 0, y: 0 }; game.lastSteerT = -10; game.keys = {}; game.tapped = {};
-      game.tutorial = null; game.dashCdUntil = 0; game.ticker = null;
+      game.tutorial = null; game.ticker = null;
       setupPitchGeom(); drawStaticPitch(); paintScoreboard();
       _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
       game.history = [snap.matchMode === 'cup' ? 'cup' : (snap.matchMode === 'league' || snap.matchMode === 'leagueCup') ? 'league' : (snap.matchMode === 'career' || snap.matchMode === 'careerCup') ? 'career' : (snap.matchMode === 'worldcup' || snap.matchMode === 'worldcupKO') ? 'worldcup' : 'title'];
@@ -721,7 +728,7 @@
       side, x: 0, y: 0, vx: 0, vy: 0, heading: atkUp(side) ? -Math.PI/2 : Math.PI/2,
       speedR: 0.85 + t.r.PAC/100 * 0.32,
       tackleCd: 0, kickCd: 0, dashT: 0, runPhase: srand()*6.28, aiT: srand()*0.3,
-      stam: 1, cards: 0,
+      stam: 1, sprintE: 1, cards: 0,
       mGoals: 0, mTk: 0, mSv: 0, mSh: 0,           // per-match stats (for Man of the Match)
       ...over,
     });
@@ -1067,7 +1074,7 @@
       for (const k in want) { if (want[k]) { game.keys[k] = true; _padKeys[k] = true; } else if (_padKeys[k]) { game.keys[k] = false; _padKeys[k] = false; } }
       if (edge('A', B(0))) { SFX.resume(); onPinch(); }                         // pass / shoot / tackle / switch
       if (edge('start', B(9)) || edge('select', B(8))) pauseMatch();
-      if (edge('dash', B(5) || B(7))) { const ch = Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'right' : 'left') : (my > 0 ? 'down' : 'up'); if (mx || my) tryDash(ch); }
+      // sprint is contextual now — no manual dash button
     } else {
       releasePadKeys();
       const dir = (mx * mx + my * my) < dz * dz ? null : (Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'ArrowRight' : 'ArrowLeft') : (my > 0 ? 'ArrowDown' : 'ArrowUp'));
@@ -1176,21 +1183,35 @@
       if (b.length === 4 && b[0]==='up' && b[1]==='down' && b[2]==='up' && b[3]==='down') {
         game.comboBuffer.length = 0; pauseMatch(); return;
       }
-      // dash: two quick swipes in the SAME direction
-      if (b.length >= 2 && b[b.length-1] === b[b.length-2] && (now - prevT) < CFG.dashWindow) tryDash(ch);
+      // (sprint is contextual + stamina-based now — no double-swipe trigger, so a
+      //  same-direction re-swipe just steers and never fires an accidental sprint)
     }
   }
-  function tryDash(ch) {
-    if (game._allAI || game.watching) return;            // no phantom dash on AI players while spectating
-    const now = performance.now();
-    if (now < game.dashCdUntil) return;
-    const p = playerById(game.activeId); if (!p || p.side !== 'home') return;
-    const m = DIRV['Arrow' + ch.charAt(0).toUpperCase() + ch.slice(1)];
-    if (m) setSteer(m.x, m.y);
-    p.dashT = CFG.dashDur; game.dashCdUntil = now + CFG.dashCd * 1000;
-    SFX.dash();
-    const pip = $('dash-pip'); if (pip) { pip.classList.remove('fire'); void pip.offsetWidth; pip.classList.add('fire'); }   // visible "sprint!" pop
-    showToast('⚡ Sprint!');                                                                                                 // brief confirm so you know it fired
+  // ----- contextual sprint for the player you control -----
+  // Your active player surges automatically in the moments you'd obviously want pace,
+  // limited by a stamina meter (the ⚡ pip). It only ever boosts speed in the direction
+  // you're already steering — it never redirects you.
+  function shouldAutoSprint(p) {
+    const b = game.ball, owner = playerById(b.owner);
+    if (owner == null) { const d = dist(p, b); return d > 3 && d < 20; }        // racing a loose ball (incl. running onto a pass)
+    if (owner.id === p.id) return spaceAhead(p) > 9;                            // carrying into open space → break away
+    if (owner.side !== p.side) {                                               // opponent has it → recover if they've broken past you
+      const attackUp = atkUp(p.side);
+      const ballGoalSide = attackUp ? (b.y > p.y + 1) : (b.y < p.y - 1);        // ball is between you and your own goal
+      return ballGoalSide && dist(p, b) < 26;
+    }
+    return false;
+  }
+  function updateActiveSprint(p, dt) {
+    if (p.sprintE == null) p.sprintE = 1;
+    const moving = len(p.vx, p.vy) > 1.5;
+    const ctx = moving && shouldAutoSprint(p);
+    const minE = p._sprinting ? 0.02 : CFG.sprintMin;     // start needs a reserve; once going, run until nearly empty (no flicker)
+    const was = p._sprinting;
+    p._sprinting = ctx && p.sprintE > minE;
+    if (p._sprinting) p.sprintE = clamp(p.sprintE - CFG.sprintDrain * dt, 0, 1);
+    else              p.sprintE = clamp(p.sprintE + CFG.sprintRegen * dt, 0, 1);
+    if (p._sprinting && !was) SFX.dash();                  // a little whoosh as the burst kicks in
   }
   function pauseMatch() { if (game.tutorial) { finishTutorial(); return; } if (game.phase === 'ended') return; saveMatch(); navigateTo('pause'); }
 
@@ -1498,7 +1519,7 @@
     // stamina drains with effort (per match-minute via _simDt); a dash costs extra
     if (game._simDt) {
       const speedFrac = len(p.vx, p.vy) / CFG.playerMax;
-      p.stam = clamp((p.stam != null ? p.stam : 1) - game._simDt * (0.00005 + 0.00010 * speedFrac) - (p.dashT > 0 ? game._simDt * 0.0002 : 0), 0, 1);
+      p.stam = clamp((p.stam != null ? p.stam : 1) - game._simDt * (0.00005 + 0.00010 * speedFrac) - (p.dashT > 0 ? game._simDt * 0.0002 : 0) - (p._sprinting ? game._simDt * 0.00012 : 0), 0, 1);
     }
 
     let mvx = 0, mvy = 0, sprint = 1;
@@ -1508,9 +1529,11 @@
     if (isActive) {
       const m = activeMove(p);
       mvx = m.x; mvy = m.y; sprint = m.sprint;
+      updateActiveSprint(p, dt);                  // contextual sprint + stamina for your player
     } else {
       const m = aiMove(p, dt);
       mvx = m.x; mvy = m.y; sprint = m.sprint;
+      if (p._sprinting) p._sprinting = false;     // only the controlled player uses the meter; AI uses dashT bursts
     }
     // tutorial: the tackle-target opponent stands still holding the ball (clear, easy lesson)
     if (game.tutorial && game.tutorial.dribbleOppId === p.id) { mvx = 0; mvy = 0; }
@@ -1529,10 +1552,11 @@
 
     // Momentum-aware steering: rotate the velocity toward the desired direction
     // (curved turns) and ease the speed — feels fluid instead of snapping.
-    const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;
+    const dashMul = p.dashT > 0 ? CFG.dashBoost : 1;               // AI instant burst
+    const sprintMul = p._sprinting ? CFG.sprintMul : 1;            // your sustained contextual sprint
     const diffSpd = (p.side === 'away' && !game._allAI) ? DIFFS[game.settings.difficulty].spd : 1;   // harder = quicker opponents (fair in spectator mode)
     const stamMul = 0.80 + 0.20 * (p.stam != null ? p.stam : 1);   // tired legs are slower
-    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * diffSpd * stamMul * (b.owner === p.id ? 0.95 : 1);
+    const maxV = CFG.playerMax * p.speedR * sprint * dashMul * sprintMul * diffSpd * stamMul * (b.owner === p.id ? 0.95 : 1);
     const moveLen = len(mvx, mvy);
     let curSpeed = len(p.vx, p.vy);
     if (moveLen > 0.01) {
@@ -4953,12 +4977,20 @@
       mf.style.background = m >= 0 ? 'var(--home-col)' : 'var(--away-col)';
     }
     SFX.crowdLevel(clamp(0.25 + Math.abs(game.mom || 0) * 0.7, 0, 1));   // crowd swells with the momentum
+    // ⚡ pip = your sprint stamina meter (a gold ring that empties as you sprint, refills when you don't)
     const pip = $('dash-pip');
     if (pip) {
-      const cooling = performance.now() < game.dashCdUntil;
-      const wasCooling = pip.classList.contains('cooling');
-      pip.classList.toggle('cooling', cooling);
-      if (wasCooling && !cooling) { pip.classList.remove('ready'); void pip.offsetWidth; pip.classList.add('ready'); }   // just recharged → a little pulse so you know sprint's back
+      const ap = playerById(game.activeId);
+      const e = (ap && ap.side === 'home' && !game._allAI && ap.sprintE != null) ? ap.sprintE : 1;
+      const deg = Math.round(clamp(e, 0, 1) * 360);
+      pip.style.background = `conic-gradient(var(--gold) ${deg}deg, rgba(120,140,130,0.22) ${deg}deg)`;
+      const sprinting = !!(ap && ap._sprinting);
+      pip.classList.toggle('sprinting', sprinting);          // brighten + pulse while actively surging
+      pip.classList.toggle('low', e < 0.18 && !sprinting);   // dim hint when nearly empty
+      const wasReady = pip._wasReady;                         // pulse the instant it refills to full
+      const full = e > 0.985;
+      if (full && wasReady === false) { pip.classList.remove('ready'); void pip.offsetWidth; pip.classList.add('ready'); }
+      pip._wasReady = full;
     }
     // spectator: show a WATCHING badge, hide the player controls
     const badge = $('watch-badge'); if (badge) badge.classList.toggle('hidden', !game.watching);
@@ -5109,7 +5141,8 @@
       tap: () => onPinch(),
       steer: (dir) => { const m = {up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[dir]; if (m) setSteer(m[0], m[1]); },
       key: (k) => onKeyDown({ key: k, repeat:false, preventDefault(){} }),
-      dash: (dir) => { game.dashCdUntil = 0; tryDash(dir || 'up'); },
+      sprintState: () => { const p = playerById(game.activeId); return p ? { id: p.id, sprintE: +(p.sprintE != null ? p.sprintE : 1).toFixed(3), sprinting: !!p._sprinting } : null; },
+      wantSprint: () => { const p = playerById(game.activeId); return p ? shouldAutoSprint(p) : null; },
       allAI: (v) => { game._allAI = !!v; },
       nav: (id) => navigateTo(id),
       score: () => scoreLine(),

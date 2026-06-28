@@ -34,7 +34,7 @@
     // Timing
     steerHold: 0.75,            // s a manual swipe overrides defensive auto-seek
     switchHyst: 6,              // m the nearest challenger must be closer to the ball before idle control hands over (anti-flicker)
-    comboWindow: 700, minComboGap: 45, dashWindow: 300,
+    comboWindow: 700, minComboGap: 45, dashWindow: 360,   // dashWindow: max ms between the two same-direction swipes that trigger a sprint (a touch forgiving for on-device swipe latency)
     goalCelebrate: 2.0, restartPause: 0.35,
     // HUD
     hudHz: 12,
@@ -1189,6 +1189,8 @@
     if (m) setSteer(m.x, m.y);
     p.dashT = CFG.dashDur; game.dashCdUntil = now + CFG.dashCd * 1000;
     SFX.dash();
+    const pip = $('dash-pip'); if (pip) { pip.classList.remove('fire'); void pip.offsetWidth; pip.classList.add('fire'); }   // visible "sprint!" pop
+    showToast('⚡ Sprint!');                                                                                                 // brief confirm so you know it fired
   }
   function pauseMatch() { if (game.tutorial) { finishTutorial(); return; } if (game.phase === 'ended') return; saveMatch(); navigateTo('pause'); }
 
@@ -4951,7 +4953,13 @@
       mf.style.background = m >= 0 ? 'var(--home-col)' : 'var(--away-col)';
     }
     SFX.crowdLevel(clamp(0.25 + Math.abs(game.mom || 0) * 0.7, 0, 1));   // crowd swells with the momentum
-    const pip = $('dash-pip'); if (pip) pip.classList.toggle('cooling', performance.now() < game.dashCdUntil);
+    const pip = $('dash-pip');
+    if (pip) {
+      const cooling = performance.now() < game.dashCdUntil;
+      const wasCooling = pip.classList.contains('cooling');
+      pip.classList.toggle('cooling', cooling);
+      if (wasCooling && !cooling) { pip.classList.remove('ready'); void pip.offsetWidth; pip.classList.add('ready'); }   // just recharged → a little pulse so you know sprint's back
+    }
     // spectator: show a WATCHING badge, hide the player controls
     const badge = $('watch-badge'); if (badge) badge.classList.toggle('hidden', !game.watching);
     const arow = $('action-chip'); if (arow) arow.style.visibility = game.watching ? 'hidden' : '';

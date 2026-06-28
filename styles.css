@@ -425,6 +425,19 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
   transition: opacity 150ms ease, transform 150ms ease, filter 150ms ease;
 }
 .dash-pip.cooling { background: transparent; color: var(--ink-3); border-color: var(--line); box-shadow: none; filter: grayscale(1); opacity: 0.5; }
+/* "sprint fired" pop — a quick bright burst the moment you double-swipe */
+.dash-pip.fire { animation: dashFire 450ms ease-out; }
+@keyframes dashFire {
+  0%   { transform: scale(1.7); box-shadow: 0 0 34px rgba(255,210,63,1); filter: none; }
+  100% { transform: scale(1);   box-shadow: 0 0 14px rgba(255,210,63,0.6); }
+}
+/* "sprint ready again" pulse when the cooldown finishes */
+.dash-pip.ready { animation: dashReady 520ms ease-out; }
+@keyframes dashReady {
+  0%   { transform: scale(1);    box-shadow: 0 0 14px rgba(255,210,63,0.6); }
+  45%  { transform: scale(1.28); box-shadow: 0 0 26px rgba(255,210,63,0.95); }
+  100% { transform: scale(1);    box-shadow: 0 0 14px rgba(255,210,63,0.6); }
+}
 
 /* goal impact punch on the pitch (both the 2D and 3D canvases) */
 #pitch, #pitch3d { transform-origin: 50% 42%; }
@@ -532,7 +545,7 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
   background: #0a130e; border: 1px solid var(--line); border-radius: 8px;
   padding: 4px 8px; font-size: 14px; font-weight: 800; color: var(--cyn);
 }
-.c-grn { color: var(--grn); } .c-cyn { color: var(--cyn); } .c-red { color: var(--red); }
+.c-grn { color: var(--grn); } .c-cyn { color: var(--cyn); } .c-red { color: var(--red); } .c-gold { color: var(--gold); }
 
 .opt-row {
   display: flex; align-items: center; justify-content: space-between;

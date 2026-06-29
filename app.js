@@ -32,6 +32,9 @@
     // sprint — contextual auto-sprint governed by a stamina meter (no gesture).
     // Your controlled player surges in the moments you'd obviously want to: racing a
     // loose ball, breaking into space with it, or recovering as the last man back.
+    // OFF for now (felt over-complicated / made the ball hard to win) — flip to true to
+    // bring it back. When false: nobody sprints, the ⚡ pip is hidden, all base pace.
+    sprintEnabled: false,
     sprintMul: 1.36,            // sustained sprint speed multiplier (vs normal running)
     sprintDrain: 0.36,         // sprint energy spent per second while sprinting (~2.8s from full)
     sprintRegen: 0.21,         // sprint energy recovered per second when not sprinting (~4.8s to full)
@@ -1210,6 +1213,7 @@
     return false;
   }
   function updateActiveSprint(p, dt) {
+    if (!CFG.sprintEnabled) { p._sprinting = false; p.sprintE = 1; return; }   // sprint disabled → base pace, full meter
     if (p.sprintE == null) p.sprintE = 1;
     const moving = len(p.vx, p.vy) > 1.5;
     const ctx = moving && shouldAutoSprint(p);
@@ -1737,6 +1741,7 @@
 
   // AI dash: give AI players a speed burst when chasing down a counter or making a key run
   function aiTryDash(p) {
+    if (!CFG.sprintEnabled) return;                         // sprint disabled → no AI bursts either (fair, predictable speeds)
     if (p.dashT > 0) return;                                // already dashing
     if ((p.stam || 1) < 0.45) return;                       // too tired
     p.dashT = CFG.dashDur * 0.8;                            // slightly shorter than human dash
@@ -5009,7 +5014,9 @@
     SFX.crowdLevel(clamp(0.25 + Math.abs(game.mom || 0) * 0.7, 0, 1));   // crowd swells with the momentum
     // ⚡ pip = your sprint stamina meter (a gold ring that empties as you sprint, refills when you don't)
     const pip = $('dash-pip');
-    if (pip) {
+    if (pip && !CFG.sprintEnabled) { pip.style.display = 'none'; }
+    else if (pip) {
+      pip.style.display = '';
       const ap = playerById(game.activeId);
       const e = (ap && ap.side === 'home' && !game._allAI && ap.sprintE != null) ? ap.sprintE : 1;
       const deg = Math.round(clamp(e, 0, 1) * 360);

@@ -25,7 +25,7 @@
     penSpot: 11, centerR: 9.15,
     // Physics (m, s)
     playerAccel: 30, playerMax: 7.2,
-    ballDecel: 7.5, ballMax: 26, ballStop: 0.08,
+    ballDecel: 7.5, ballMax: 30, ballStop: 0.08,   // ballMax raised so long passes actually reach (a 30 m/s ground ball travels ~60m)
     controlDist: 1.15, captureR: 1.45, tackleR: 2.1, captureSpeed: 19,
     // ball arc (height) — mostly visual; gates capture & "over the bar"
     ballGravity: 12, crossbarH: 2.44, catchH: 2.5,
@@ -1493,24 +1493,30 @@
     game.activeLockT = Math.max(0, game.activeLockT - dt);
     const b = game.ball;
     const owner = playerById(b.owner);
-    if (owner && owner.side === 'home') { game.activeId = owner.id; return; }   // your team has it → control the carrier
+    const now = performance.now() / 1000;
+    // YOUR TEAM HAS THE BALL → control the carrier. This is the on-catch switch: when a
+    // pass is received, the receiver becomes the carrier and control hands over here.
+    if (owner && owner.side === 'home') { game.activeId = owner.id; game._passTo = null; game._passUntil = 0; return; }
     const cur = playerById(game.activeId);
     const curValid = cur && !cur.isGK && cur.side === 'home';
     const best = bestChallenger();
     if (!curValid) { if (best) game.activeId = best.id; return; }               // no valid player → must re-pick
-    const now = performance.now() / 1000;
     const steering = (now - game.lastSteerT) < CFG.steerHold;
-    // POSSESSION LOST: the opponent now has the ball (e.g. a pass was intercepted, or a
-    // tackle won it). Abandon a stale pass-follow / manual-switch lock so control returns
-    // to the best-placed defender instead of being stranded on a far-away player. An
+    // PASS IN FLIGHT: you just passed and the ball is loose. Keep control on the PASSER
+    // (so you can run a give-and-go) until the ball is caught — don't chase control around
+    // the moving ball. Reception (above) or interception (below) ends the hold.
+    if (b.owner == null && game._passUntil && now < game._passUntil) return;
+    // POSSESSION LOST: the opponent now has the ball (pass intercepted / tackle won it).
+    // Drop any stale pass/lock state and return control to the best-placed defender. An
     // ACTIVE steer is always respected (we never yank a player out from under your swipe).
-    if (owner && owner.side === 'away' && !steering && best && cur &&
-        best.id !== game.activeId && dist(cur, b) > dist(best, b) + CFG.switchHyst) {
-      game._recvUntil = 0; game.activeLockT = 0; game.activeId = best.id; return;
+    if (owner && owner.side === 'away') {
+      game._passTo = null; game._passUntil = 0;
+      if (!steering && best && cur && best.id !== game.activeId && dist(cur, b) > dist(best, b) + CFG.switchHyst) {
+        game.activeLockT = 0; game.activeId = best.id; return;
+      }
     }
-    // NEVER pull control off the player you're actively steering, just manually switched to,
-    // or receiving a pass with — so a swipe is never hijacked mid-move.
-    if (steering || game.activeLockT > 0 || (game._recvUntil && now < game._recvUntil)) return;
+    // NEVER pull control off the player you're actively steering or just manually switched to.
+    if (steering || game.activeLockT > 0) return;
     // Idle on defence / loose ball → keep the marker on the action: hand control to a clearly
     // better-placed challenger so your player is never stranded far from the ball (hysteresis stops flicker).
     if (best && best.id !== game.activeId && dist(cur, b) > dist(best, b) + CFG.switchHyst) game.activeId = best.id;
@@ -1652,8 +1658,8 @@
       }
     } else if (steering) {
       dx = game.steer.x; dy = game.steer.y;
-    } else if (game.settings.chase === 'On' || (game._recvUntil && now < game._recvUntil)) {
-      // auto-seek the ball (auto-chase on, OR you just received a pass → run onto it)
+    } else if (game.settings.chase === 'On') {
+      // auto-seek the ball (auto-chase setting on)
       const tgtx = b.x + b.vx * 0.18, tgty = b.y + b.vy * 0.18;
       dx = tgtx - p.x; dy = tgty - p.y;
     } else {
@@ -1778,7 +1784,13 @@
     if (b.owner == null) {
       // LOOSE BALL — chase or intercept
       const ballSpeed = len(b.vx, b.vy);
-      if (closest === 0) {
+      const nowS = performance.now() / 1000;
+      if (game._passTo === p.id && game._passUntil && nowS < game._passUntil) {
+        // INTENDED RECEIVER of a pass: run onto the ball so the pass connects (even if not
+        // the nearest player). Control hands to you once you actually collect it.
+        dx = b.x + b.vx*0.22 - p.x; dy = b.y + b.vy*0.22 - p.y; sprint = 1.08;
+        if (dist(p, b) < 12) aiTryDash(p);
+      } else if (closest === 0) {
         // primary chaser — predict where the ball will be
         dx = b.x + b.vx*0.25 - p.x; dy = b.y + b.vy*0.25 - p.y; sprint = 1.06;
         if (dist(p, b) < 10) aiTryDash(p);                 // burst to win the 50-50
@@ -2361,12 +2373,14 @@
     for (const m of mates) {
       if (m === p || m.isGK) continue;
       const dx = m.x - p.x, dy = m.y - p.y, d = len(dx, dy);
-      if (d < 3 || d > 55) continue;
+      if (d < 3 || d > 70) continue;                    // allow longer balls (was 55)
       const align = (dx/d) * ax + (dy/d) * ay;          // -1..1: in the facing direction?
       const open = clamp(nearestOppToPoint(m, p.side) / 8, 0, 1);
       const lane = laneClear(p, m) ? 1 : 0.4;
-      const distPen = d > 38 ? (d - 38) / 40 : 0;
-      const score = align * 1.5 + open * 0.35 + lane * 0.35 - distPen - (d < 6 ? 0.25 : 0);
+      const distPen = d > 55 ? (d - 55) / 60 : 0;        // gentler, later penalty → long passes in your steer direction win
+      // direction is what you're aiming → weight alignment heavily so a hard steer at a
+      // distant team-mate picks THEM instead of a safer short option.
+      const score = align * 1.9 + open * 0.3 + lane * 0.3 - distPen - (d < 6 ? 0.35 : 0);
       if (score > bs) { bs = score; best = m; }
     }
     return best;
@@ -2411,12 +2425,12 @@
     } else {
       kickTo(p, mate.x + mate.vx * 0.30, mate.y + mate.vy * 0.30, false, 0.97);
     }
-    // Follow the receiver via the soft receive-window — NOT a hard lock. A hard lock
-    // would strand control on the intended receiver for ~1.4s even when the pass is
-    // intercepted or never reaches them; the receive-window yields the moment the
-    // opponent wins it (see chooseActive), so control snaps back to a real defender.
-    setActive(mate.id);
-    game._recvUntil = performance.now() / 1000 + 1.5;   // the receiver runs onto the pass (so it connects + control stays on them)
+    // CONTROL STAYS ON THE PASSER until the ball is actually caught — then chooseActive
+    // hands control to the new carrier. No jump to the (far / maybe-intercepted) target,
+    // so control only changes on a real reception → far fewer, clearer switches. The
+    // intended receiver runs onto the ball via aiMove so the pass still connects.
+    game._passTo = mate.id;
+    game._passUntil = performance.now() / 1000 + clamp(d / 18 + 0.7, 1.0, 2.8);   // flight window scales with distance (long balls hang longer)
     if (game.tutorial) game.tutorial.passed = true;
   }
   function kickLob(p, tx, ty, skill) {
@@ -2469,9 +2483,10 @@
     if (!isShot) { recordPassAttempt(p.side); markOffside(p.side); }
     const d = len(tx - p.x, ty - p.y);
     const err = (1 - skill) * (d * 0.10 + 1.5);
-    // speed chosen so ground friction brings the ball ~to the target (v² = 2·decel·d), slight overhit
-    let speed = clamp(Math.sqrt(2 * CFG.ballDecel * d) * 1.08, 9, CFG.ballMax);
-    if (opt && opt.drive) speed = clamp(speed * 1.28, 9, CFG.ballMax);   // driven through-ball: more pace into space
+    // speed chosen so ground friction carries the ball to the target (v² = 2·decel·d) with a
+    // bit of overhit so it arrives crisply rather than dying short.
+    let speed = clamp(Math.sqrt(2 * CFG.ballDecel * d) * 1.14, 10, CFG.ballMax);
+    if (opt && opt.drive) speed = clamp(speed * 1.28, 10, CFG.ballMax);   // driven through-ball: more pace into space
     kickRaw(p, tx + rrange(-err, err), ty + rrange(-err, err), speed, isShot);
   }
   function kickRaw(p, tx, ty, speed, isShot) {
@@ -4628,20 +4643,25 @@
     // a brief "pop" the instant control switches → your eye is drawn to the new player
     const nowMs = performance.now();
     if (aId !== r._prevActive) { r._activeFlashT = nowMs; r._prevActive = aId; }
-    const flash = clamp(1 - (nowMs - (r._activeFlashT || -1e9)) / 380, 0, 1);   // 1 → 0 over 380ms
-    if (ap && ap.side === 'home') {                  // ALWAYS mark the player you control (incl. the keeper)
+    const flash = clamp(1 - (nowMs - (r._activeFlashT || -1e9)) / 320, 0, 1);   // 1 → 0 over 320ms
+    // ONE clean indicator: a single icon floating above the player you control. No ground
+    // ring, no beam — just the chevron, always drawn on top, with a gentle pulse and a
+    // small pop when control hands over (which now only happens on a real reception).
+    r.activeRing.visible = false; r.beam.visible = false;
+    if (ap && ap.side === 'home') {
       const wx2 = ap.x - 44, wz2 = ap.y - 52.5;
-      r.activeRing.visible = true; r.activeRing.position.set(wx2, 0.05, wz2);
-      r.activeRing.scale.setScalar(1.6 * (1 + flash * 0.9));                    // ring swells on switch, then settles
-      r.activeRing.material.opacity = 1.0;
-      const cp = (2.6 + 0.55 * Math.sin(nowMs / 220)) * (1 + flash * 0.6);      // gentle pulse + switch pop
-      r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(wx2, 3.1, wz2);
-      r.beam.visible = true; r.beam.position.set(wx2, 0, wz2);
-      r.beam.material.opacity = (0.55 + 0.2 * (0.5 + 0.5 * Math.sin(nowMs / 220))) * (1 + flash * 0.5);
+      const cp = (2.9 + 0.35 * Math.sin(nowMs / 260)) * (1 + flash * 0.4);
+      r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(wx2, 3.3, wz2);
+      r.chevron.material.opacity = 1.0;
     }
-    else { r.activeRing.visible = false; r.chevron.visible = false; r.beam.visible = false; }
+    else r.chevron.visible = false;
+    // ball-location ring — only on OTHER ball-holders (a team-mate building up, or the
+    // opponent). When you hold it, the chevron above you already says it all → no ring.
     const owner = playerById(b.owner);
-    if (owner && !owner.isGK) { r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5); const cc = (aId === owner.id) ? '#58d6ff' : (owner.side === 'home' ? '#3ef08f' : '#ff7a45'); r.carrierRing.material.color.set(cc); }
+    if (owner && !owner.isGK && owner.id !== aId) {
+      r.carrierRing.visible = true; r.carrierRing.position.set(owner.x - 44, 0.06, owner.y - 52.5);
+      r.carrierRing.material.color.set(owner.side === 'home' ? '#3ef08f' : '#ff7a45');
+    }
     else r.carrierRing.visible = false;
     updateAim3D(ap);
     r.renderer.render(r.scene, r.camera);

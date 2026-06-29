@@ -728,5 +728,7 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
   background: rgba(8, 22, 28, 0.85);
 }
 .touch-pinch:active { background: rgba(88,214,255,0.4); transform: scale(0.94); }
-/* phone: top-align the pitch so the bottom control bar sits below it (not over the play area) */
-body.is-phone { align-items: flex-start; padding-top: max(6px, env(safe-area-inset-top)); }
+/* phone: top-align the pitch so the bottom control bar sits below it (not over the play area).
+   The padding clears the status bar; #app scales from its TOP edge (set in fitToScreen) so the
+   scoreboard always sits just below the status bar instead of being pushed up under it. */
+body.is-phone { align-items: flex-start; padding-top: max(34px, env(safe-area-inset-top)); }

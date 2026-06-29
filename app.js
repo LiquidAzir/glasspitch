@@ -486,7 +486,7 @@
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
       game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
       game._concede = snap.concede || null; game._lastWasShot = !!snap.lastWasShot; game.mom = snap.mom || 0;
-      game.weather = snap.weather || 'clear'; game._ballDecelMul = game.weather === 'rain' ? 0.62 : 1;
+      game.weather = 'clear'; game._ballDecelMul = 1;   // rain disabled — always clear, even restoring an old save
       game.poss = (snap.poss && typeof snap.poss.home === 'number') ? { home: snap.poss.home, away: snap.poss.away } : { home: 1, away: 1 };
       game.stats = snap.stats || { shots: { home: 0, away: 0 }, sot: { home: 0, away: 0 }, fouls: { home: 0, away: 0 } };
       resetMatchStats();
@@ -535,7 +535,6 @@
     const og = $('opt-gfx'); if (og) og.textContent = game.settings.gfx || '2D';
     const oc = $('opt-cam'); if (oc) oc.textContent = game.settings.cam || 'Side';
     const och = $('opt-chase'); if (och) och.textContent = game.settings.chase || 'Off';
-    const ow = $('opt-weather'); if (ow) ow.textContent = game.settings.weather || 'Auto';
     $('opt-sound').textContent = game.settings.sound ? 'ON' : 'OFF';
     $('opt-touch').textContent = game.settings.touch ? 'ON' : 'OFF';
     const r = game.record;
@@ -907,13 +906,13 @@
     game.mom = clamp(game.mom, -1, 1);
   }
   // ----- weather -----
-  function setWeather() {   // choose per match from the setting (Auto = random)
-    const s = game.settings.weather || 'Auto';
-    game.weather = s === 'Rain' ? 'rain' : s === 'Clear' ? 'clear' : (srand() < 0.32 ? 'rain' : 'clear');
-    game._ballDecelMul = game.weather === 'rain' ? 0.62 : 1;   // wet pitch → ball slides faster/further
+  // Rain is disabled — the pitch is always clear (no rain overlay, no wet-ball physics).
+  function setWeather() {
+    game.weather = 'clear';
+    game._ballDecelMul = 1;
     applyWeatherClass();
   }
-  function applyWeatherClass() { const m = $('match'); if (m) m.classList.toggle('weather-rain', game.weather === 'rain'); }
+  function applyWeatherClass() { const m = $('match'); if (m) m.classList.remove('weather-rain'); }
   function allPlayers() { return game.home.players.concat(game.away.players); }
   // O(1)-ish, allocation-free (ids are unique across both rosters) — called many times per frame
   function playerById(id) {
@@ -985,12 +984,20 @@
     if (window.visualViewport) window.visualViewport.addEventListener('resize', fitToScreen);
   }
   // scale the fixed 600x600 app to fit PC / phone screens; glasses (600x600) snap to 1:1 (untouched)
+  const PHONE_TOP = 34;   // px reserved at the top for the phone status bar (matches body.is-phone padding-top)
   function fitToScreen() {
     const app = $('app'); if (!app) return;
-    let s = Math.min(window.innerWidth / 600, window.innerHeight / 600);
-    if (s > 0.93 && s < 1.07) s = 1;                 // ~square viewport (glasses) → exact 1:1
+    const phone = isPhone();
+    // On phones, anchor the app to the top (below the status bar) and fit within the
+    // height MINUS that reserved strip so the scoreboard is never clipped. The 1:1
+    // snap is glasses-only — forcing scale 1 on a near-square phone was what pushed
+    // the scoreboard up under the status bar.
+    app.style.transformOrigin = phone ? 'top center' : '';
+    const availH = window.innerHeight - (phone ? PHONE_TOP : 0);
+    let s = Math.min(window.innerWidth / 600, availH / 600);
+    if (!phone && s > 0.93 && s < 1.07) s = 1;       // ~square viewport (glasses) → exact 1:1
     app.style.transform = 'scale(' + (s || 1) + ')';
-    document.body.classList.toggle('is-phone', isPhone());   // top-align + show the bottom control bar on phones
+    document.body.classList.toggle('is-phone', phone);   // top-align + show the bottom control bar on phones
     updateTouchVisibility();
   }
   function isPhone() {
@@ -1316,7 +1323,6 @@
       case 'toggle-gfx': toggleGfx(); break;
       case 'toggle-cam': toggleCam(); break;
       case 'toggle-chase': toggleChase(); break;
-      case 'cycle-weather': cycleWeather(); break;
       case 'resume-second': startSecondHalf(); break;
       case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; else if (m === 'worldcup' || m === 'worldcupKO') game.history = ['worldcup']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
@@ -4379,11 +4385,6 @@
     game.settings.chase = game.settings.chase === 'On' ? 'Off' : 'On';
     saveStore(); renderSettings();
   }
-  function cycleWeather() {
-    const seq = ['Auto', 'Clear', 'Rain'];
-    game.settings.weather = seq[(seq.indexOf(game.settings.weather || 'Auto') + 1) % seq.length];
-    saveStore(); renderSettings();
-  }
   // In the 3D Behind-the-net view we lift the action chip + dash pip into the empty band
   // below the scoreboard (CSS class) so the camera can drop lower and zoom into the field.
   function updateHudLayout() {
@@ -4550,14 +4551,17 @@
     [ball, ballOutline].forEach(m => { m.frustumCulled = false; });
     const ballShadow = new T.Mesh(blobGeo, new T.MeshBasicMaterial({ color: 0x101810, transparent: true, opacity: 0.45, depthWrite: false }));
     ballShadow.scale.setScalar(1.15); scene.add(ballShadow);
-    // indicator rings + chevron
+    // indicator rings + chevron.
+    // depthTest:false + a high renderOrder make these markers punch through player
+    // bodies so YOUR player is never hidden behind others (esp. in a crowd / after a
+    // switch). Without it the foot-level ring gets occluded and looks like it vanished.
     const ringGeo = new T.RingGeometry(0.98, 1.4, 30); ringGeo.rotateX(-Math.PI / 2);
-    const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false })); activeRing.scale.setScalar(1.45); scene.add(activeRing);   // YOUR player: bold cyan ring
-    const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(carrierRing);
-    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false })); chevron.scale.set(2.6, 2.6, 1); scene.add(chevron);   // bright marker over YOUR player
+    const activeRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 1.0, depthWrite: false, depthTest: false })); activeRing.scale.setScalar(1.6); activeRing.renderOrder = 20; scene.add(activeRing);   // YOUR player: bold cyan ring, always on top
+    const carrierRing = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: 0x3ef08f, transparent: true, opacity: 0.95, depthWrite: false, depthTest: false })); carrierRing.renderOrder = 19; scene.add(carrierRing);
+    const chevron = new T.Sprite(new T.SpriteMaterial({ map: radialTex(T, '#58d6ff'), transparent: true, blending: T.AdditiveBlending, depthWrite: false, depthTest: false })); chevron.scale.set(2.6, 2.6, 1); chevron.renderOrder = 21; scene.add(chevron);   // bright marker over YOUR player
     // a tall glowing beam so the player YOU control is unmistakable anywhere on the pitch
     const beamGeo = new T.CylinderGeometry(0.30, 0.30, 9, 10, 1, true); beamGeo.translate(0, 4.4, 0);
-    const beam = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color: 0x6fe0ff, transparent: true, opacity: 0.55, depthWrite: false, blending: T.AdditiveBlending, side: T.DoubleSide })); scene.add(beam);
+    const beam = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color: 0x6fe0ff, transparent: true, opacity: 0.62, depthWrite: false, depthTest: false, blending: T.AdditiveBlending, side: T.DoubleSide })); beam.renderOrder = 18; scene.add(beam);
     // aim guide — line on the pitch + a target ring (mirrors the 2D shoot/pass hints)
     const aimGeo = new T.BufferGeometry(); aimGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(6), 3));
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
@@ -4621,13 +4625,19 @@
     // indicators (mirror the 2D colour language) — hidden during a goal replay for a clean cinematic
     const aId = (!game._allAI && !game._replay) ? game.activeId : null;
     const ap = aId ? playerById(aId) : null;
+    // a brief "pop" the instant control switches → your eye is drawn to the new player
+    const nowMs = performance.now();
+    if (aId !== r._prevActive) { r._activeFlashT = nowMs; r._prevActive = aId; }
+    const flash = clamp(1 - (nowMs - (r._activeFlashT || -1e9)) / 380, 0, 1);   // 1 → 0 over 380ms
     if (ap && ap.side === 'home') {                  // ALWAYS mark the player you control (incl. the keeper)
       const wx2 = ap.x - 44, wz2 = ap.y - 52.5;
       r.activeRing.visible = true; r.activeRing.position.set(wx2, 0.05, wz2);
-      const cp = 2.6 + 0.55 * Math.sin(performance.now() / 220);    // gentle pulse so YOUR player is unmistakable
+      r.activeRing.scale.setScalar(1.6 * (1 + flash * 0.9));                    // ring swells on switch, then settles
+      r.activeRing.material.opacity = 1.0;
+      const cp = (2.6 + 0.55 * Math.sin(nowMs / 220)) * (1 + flash * 0.6);      // gentle pulse + switch pop
       r.chevron.visible = true; r.chevron.scale.set(cp, cp, 1); r.chevron.position.set(wx2, 3.1, wz2);
       r.beam.visible = true; r.beam.position.set(wx2, 0, wz2);
-      r.beam.material.opacity = 0.5 + 0.18 * (0.5 + 0.5 * Math.sin(performance.now() / 220));
+      r.beam.material.opacity = (0.55 + 0.2 * (0.5 + 0.5 * Math.sin(nowMs / 220))) * (1 + flash * 0.5);
     }
     else { r.activeRing.visible = false; r.chevron.visible = false; r.beam.visible = false; }
     const owner = playerById(b.owner);

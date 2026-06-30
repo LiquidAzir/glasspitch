@@ -728,6 +728,11 @@ body { position: fixed; inset: 0; display: flex; align-items: center; justify-co
   background: rgba(8, 22, 28, 0.85);
 }
 .touch-pinch:active { background: rgba(88,214,255,0.4); transform: scale(0.94); }
+/* "Touch Outlines: OFF" — strip the boxes/borders for a clean screen; the controls stay
+   tappable, just shown as faint glyphs with a soft press flash. */
+body.touch-bare .touch-btn { background: transparent; border-color: transparent; box-shadow: none; color: rgba(234,252,241,0.28); }
+body.touch-bare .touch-pinch { color: rgba(88,214,255,0.34); }
+body.touch-bare .touch-btn:active { background: rgba(255,255,255,0.10); transform: scale(0.94); }
 /* phone: top-align the pitch so the bottom control bar sits below it (not over the play area).
    The padding clears the status bar; #app scales from its TOP edge (set in fitToScreen) so the
    scoreboard always sits just below the status bar instead of being pushed up under it. */

@@ -278,7 +278,7 @@
   const game = {
     screen: 'title',
     history: [],
-    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, offside: true, gfx: '3D', cam: 'Side', chase: 'Off', weather: 'Auto', sound: true, touch: false },
+    settings: { difficulty: 'Normal', length: 'Normal', formation: '4-3-3', mentality: 'Balanced', autoSub: true, setPieces: true, offside: true, gfx: '3D', cam: 'Side', chase: 'Off', weather: 'Auto', sound: true, touch: false, touchOutlines: true },
     mom: 0,                                          // match momentum: -1 (all away) .. +1 (all home)
     weather: 'clear', _ballDecelMul: 1,             // rain → less friction (faster/skiddy ball)
     record: { w: 0, d: 0, l: 0 },
@@ -354,6 +354,12 @@
       $('pause-score').textContent = scoreLine();
       const sb = $('sound-toggle-btn'); if (sb) sb.textContent = 'Sound: ' + (game.settings.sound ? 'ON' : 'OFF');
       const tb = $('touch-toggle-btn'); if (tb) tb.textContent = 'Touch Controls: ' + (game.settings.touch ? 'ON' : 'OFF');
+      // touch-outlines toggle: only relevant when the on-screen controls are showing (phone, or Touch Controls on)
+      const ob = $('touch-outlines-btn');
+      if (ob) {
+        ob.textContent = 'Touch Outlines: ' + (game.settings.touchOutlines ? 'ON' : 'OFF');
+        ob.classList.toggle('hidden', !(isPhone() || game.settings.touch));
+      }
       const wb = $('pause-watch-btn'); if (wb) wb.textContent = game.watching ? '🎮 Take Control' : '👁 Watch (AI plays)';
       renderPauseTactics();
     }
@@ -1115,6 +1121,11 @@
   function updateTouchVisibility() {
     const el = $('touch-controls'); if (!el) return;
     el.classList.toggle('hidden', !((isPhone() || game.settings.touch) && game.screen === 'match'));
+    document.body.classList.toggle('touch-bare', game.settings.touchOutlines === false);   // strip the d-pad/button outlines for a cleaner screen
+  }
+  function toggleTouchOutlines() {
+    game.settings.touchOutlines = !game.settings.touchOutlines; saveStore(); updateTouchVisibility();
+    const b = $('touch-outlines-btn'); if (b) b.textContent = 'Touch Outlines: ' + (game.settings.touchOutlines ? 'ON' : 'OFF');
   }
   function showTouch(on) {
     game.settings.touch = on; saveStore(); updateTouchVisibility();
@@ -1295,6 +1306,7 @@
       case 'cycle-length': cycle('length', ['Short','Normal','Long']); break;
       case 'cycle-formation': cycle('formation', FORMATION_KEYS); break;
       case 'toggle-sound': toggleSound(); break;
+      case 'toggle-touch-outlines': toggleTouchOutlines(); break;
       case 'menu-touch-toggle': showTouch(!game.settings.touch); break;
       case 'reset-record': game.record = {w:0,d:0,l:0}; saveStore(); renderSettings(); break;
       case 'kickoff-go': kickoffGo(); break;
@@ -1896,33 +1908,43 @@
     } else if (weHaveBall && p.role === 'FWD') {
       // FORWARD RUNS
       const fy = attackUp ? -1 : 1;
-      const runSlot = srandHash(p.idx, b);
-      // game state: winning comfortably → hold position; losing → make aggressive runs
-      const urgency = ctx.losing ? 1.3 : (ctx.winning && ctx.gap >= 2 ? 0.6 : 1.0);
-      if (runSlot) {
-        // diagonal run behind the defensive line
-        const runBias = ((p.idx * 17) % 3 - 1) * 8;
-        const targetX = clamp(b.x + runBias, 6, CFG.PW - 6);
-        const targetY = clamp(b.y + fy * (12 * urgency), 2, CFG.PL - 2);
-        dx = targetX - p.x; dy = targetY - p.y; sprint = 1.04;
-      } else {
-        // check-to-the-ball: come short for a safe outlet
-        const safeX = lerp(p.x, b.x, 0.35);
-        const safeY = lerp(p.y, b.y, 0.25);
-        dx = safeX - p.x; dy = safeY - p.y;
-      }
-      // winger near the byline → hold width and sprint to the corner flag for a cross
+      const ballAdvanced = attackUp ? (b.y < CFG.PL * 0.52) : (b.y > CFG.PL * 0.48);   // ball in the attacking half
       const onWing = p.x < CFG.PW * 0.2 || p.x > CFG.PW * 0.8;
       const nearByline = attackUp ? (p.y < CFG.PL * 0.12) : (p.y > CFG.PL * 0.88);
       if (onWing && nearByline && owner && owner.id !== p.id) {
+        // winger at the byline → drive to the corner for a cross
         const byX = p.x < CFG.PW/2 ? 3 : CFG.PW - 3;
         const byY = attackUp ? 4 : CFG.PL - 4;
         dx = byX - p.x; dy = byY - p.y; sprint = 1.05;
+      } else if (ballAdvanced && owner && owner.id !== p.id) {
+        // GET INTO THE BOX as a shooting outlet — spread across its width so there are
+        // always bodies central near goal for a pass / cross / cut-back to find.
+        const slot = (p.idx % 3) - 1;                       // -1 / 0 / +1 → left / centre / right
+        const boxX = clamp(CFG.PW/2 + slot * 9 + (b.x - CFG.PW/2) * 0.25, 9, CFG.PW - 9);
+        const boxY = attackUp ? CFG.PL * 0.11 : CFG.PL * 0.89;   // inside the penalty area
+        dx = boxX - p.x; dy = boxY - p.y; sprint = 1.05;
+      } else {
+        // ball still deep → push up ahead of it (or check short for an outlet)
+        const urgency = ctx.losing ? 1.3 : (ctx.winning && ctx.gap >= 2 ? 0.6 : 1.0);
+        if (srandHash(p.idx, b)) {
+          const runBias = ((p.idx * 17) % 3 - 1) * 8;
+          const targetX = clamp(b.x + runBias, 6, CFG.PW - 6);
+          const targetY = clamp(b.y + fy * (12 * urgency), 2, CFG.PL - 2);
+          dx = targetX - p.x; dy = targetY - p.y; sprint = 1.04;
+        } else {
+          dx = lerp(p.x, b.x, 0.35) - p.x; dy = lerp(p.y, b.y, 0.25) - p.y;
+        }
       }
     } else if (weHaveBall && p.role === 'MID') {
       // MIDFIELD SUPPORT
       const distToBall = dist(p, b);
-      if (distToBall > 22 && owner && owner.role !== 'GK') {
+      const ballAdvancedM = attackUp ? (b.y < CFG.PL * 0.42) : (b.y > CFG.PL * 0.58);
+      if (ballAdvancedM && owner && owner.id !== p.id && (p.idx % 2 === 0)) {
+        // ball deep in attack → an attacking mid breaks into the box edge to shoot / rebound
+        const edgeX = clamp(CFG.PW/2 + ((p.idx % 3) - 1) * 11, 10, CFG.PW - 10);
+        const edgeY = attackUp ? CFG.PL * 0.2 : CFG.PL * 0.8;
+        dx = edgeX - p.x; dy = edgeY - p.y; sprint = 1.03;
+      } else if (distToBall > 22 && owner && owner.role !== 'GK') {
         dx = lerp(tx, b.x, 0.35) - p.x; dy = lerp(ty, b.y, 0.25) - p.y; sprint = 1.02;
       } else {
         // find space between the lines
@@ -2036,11 +2058,14 @@
     const counter = isCounterAttack(p);
     const playerSkill = (p.pace || 50) + ((p.shoot || 50) * 0.3);
     const ctx = gameContext(p.side);
+    if (zone === 'final') p.aiT = Math.min(p.aiT, 0.22 + rrange(0, 0.08));   // think a bit faster near goal → more decisions in the box
 
     // ========================
-    // 0. ONE-TOUCH PLAY: pass first-time under extreme pressure in a good position
+    // 0. ONE-TOUCH PLAY: quick first-time pass under pressure in MIDFIELD build-up.
+    // (Not in the final third — there we'd rather shoot or drive at goal than reflexively
+    //  pass the ball backward, which was killing the AI's shot count.)
     // ========================
-    if (pressNow < 2.2 && zone !== 'own' && p.kickCd <= 0) {
+    if (pressNow < 2.2 && zone === 'mid' && p.kickCd <= 0) {
       const quickTarget = bestPassTarget(p);
       if (quickTarget && quickTarget.score > 0.40) {
         // first-time pass — no reaction delay
@@ -2099,15 +2124,15 @@
     // ========================
     // 3. SHOOT
     // ========================
-    const inRange = goalDist < 30 && (attackUp ? p.y < CFG.PL*0.58 : p.y > CFG.PL*0.42);
+    const inRange = goalDist < 35 && (attackUp ? p.y < CFG.PL*0.62 : p.y > CFG.PL*0.38);
     if (inRange) {
-      let sp = 0.22 + (t.r.ATT/100)*0.35 - goalDist/50;
-      if (pressNow < 3) sp += 0.22;
-      if (pressNow > 8) sp -= 0.12;
-      if (zone === 'final' && goalDist < 16) sp += 0.18;
-      if (p.shoot && p.shoot > 70) sp += 0.10;
-      if (ctx.losing && ctx.veryLate) sp += 0.15;         // desperate: shoot more when losing late
-      sp = clamp(sp, 0.08, 0.88);
+      let sp = 0.30 + (t.r.ATT/100)*0.28 - goalDist/72;   // shoots from range, but not trigger-happy
+      if (pressNow < 3.5) sp += 0.16;                     // a defender closing → get the shot off, don't get crowded out
+      if (zone === 'final' && goalDist < 18) sp += 0.18;  // prime scoring zone
+      if (goalDist < 11) sp += 0.16;                      // near point-blank → usually shoot
+      if (p.shoot && p.shoot > 70) sp += 0.08;
+      if (ctx.losing && ctx.veryLate) sp += 0.15;
+      sp = clamp(sp, 0.10, 0.85);
       if (srand() < sp) { aiShoot(p); return; }
     }
 
@@ -2476,7 +2501,9 @@
     const ty = gy;
     const sh = p.shoot || teamObj(side).def.r.ATT;                     // a clinical finisher is more accurate
     const skill = clamp(((acc && acc.shot) || 0.9) * (0.82 + sh/100 * 0.24), 0.5, 0.99);
-    const err = (1 - skill) * 6 + clamp(goalDist/30,0,1) * 1.4;
+    // wider spread (esp. from range) so not every shot is on target — keeps the shot count
+    // up without flooding the net. Human shots use skill≈0.99 so they stay accurate.
+    const err = (1 - skill) * 9 + clamp(goalDist/24, 0, 1.4) * 2.4;
     const ex = tx + rrange(-err, err), ey = ty + rrange(-1, 1);
     const onT = Math.abs(ex - CFG.PW/2) < CFG.goalHalfW;
     if (onT) { game.stats.sot[side]++; p.mSh = (p.mSh || 0) + 1; bumpMom(side, 0.06); SFX.crowdRoar(0.45); }   // on-frame = on target → crowd swells

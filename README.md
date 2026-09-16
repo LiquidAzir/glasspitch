@@ -4,7 +4,7 @@ Holographic arcade soccer for **Meta Ray-Ban Display** glasses. Vanilla HTML/CSS
 
 ## Play
 
-- **Play Now** starts an exhibition immediately. **Choose Teams** lets you pick both clubs before Kick Off. In team selection, left/right changes the club and returns focus to the confirmation button; up/down selects other controls.
+- **Play Now** starts an exhibition immediately. **Choose Teams** lets you pick both clubs before Kick Off. In team selection, left/right changes the club and returns focus to the confirmation button; up/down selects other controls. Pinching a carousel button keeps it selected for repeated changes. Back from the opponent step returns to your team; Back from the line-ups returns to the opponent.
 - **Swipe ← ↑ → ↓** — steer the player with the cyan ring and pointer. Directions follow the selected camera. With possession you keep dribbling; off the ball, hold a direction or swipe again to keep moving.
 - **Pinch (tap / Enter)** — one context button. The chip at the bottom of the screen always shows what it does:
   - **PASS** — slide the ball to the best teammate ahead.
@@ -12,6 +12,8 @@ Holographic arcade soccer for **Meta Ray-Ban Display** glasses. Vanilla HTML/CSS
   - **TACKLE** — when defending and near the ball.
   - **SWITCH** — when far from play, pick the next presser.
 - **Menu**, **↑↓↑↓**, or **Esc** — pause. Keyboard Tab also reaches Menu; Enter and focused-button click behave consistently.
+- Menus keep the selected control after changing a setting. Substitutions select a replacement player, then return to the roster; Cancel/Back restores the outgoing player. Returning from a submenu or confirmation restores its opening button.
+- **Browser Back** pauses live play, backs out of nested menus one step, then saves and returns to the title from the pause menu. Another Back at the title can leave the site. **Esc** closes pause to resume; **Save & Return to Title** is also available in both match and penalty/free-kick pause menus. The native-history guard uses one extra same-URL entry, including across reloads. A host-level system exit that sends no web event cannot be intercepted by the page.
 - On a controller connected to the device running the browser, use the stick/D-pad to steer, A for the action and B/Start to pause; Start resumes. Controller and phone directional input do not trigger the glasses pause gesture.
 
 Control stays with your defender until you switch; it moves to your carrier on gaining possession and to the receiver only after a pass is caught. Teammates and keepers run automatically. Sprint is disabled. Phone controls use native touch targets and menus.
@@ -47,6 +49,7 @@ node tests/browser.cjs
 node tests/edges.browser.cjs
 node tests/entry.browser.cjs
 node tests/controls.browser.cjs
+node tests/neural-navigation.browser.cjs
 node tests/lifecycle.browser.cjs
 node tests/tutorial.browser.cjs
 node tests/art.browser.cjs

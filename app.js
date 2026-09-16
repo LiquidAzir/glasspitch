@@ -315,9 +315,33 @@
   // ============================================================
   // NAVIGATION
   // ============================================================
+  const screenFocus = new Map();
+  const BACK_STATE = 'glasspitchNavigation';
+  let browserBackArmed = window.history.state?.[BACK_STATE] === 'play';
+  function armGameBack() {
+    // One same-document entry catches native Back without adding an entry for
+    // every menu, pinch, or reload. The title remains an exit route.
+    try {
+      if (window.history.state?.[BACK_STATE] !== 'play') {
+        const state = window.history.state && typeof window.history.state === 'object' ? window.history.state : {};
+        window.history.replaceState({ ...state, [BACK_STATE]: 'base' }, '');
+        window.history.pushState({ ...state, [BACK_STATE]: 'play' }, '');
+      }
+      browserBackArmed = true;
+    } catch (_) { /* On-screen and keyboard Back still work without History API. */ }
+  }
+  function onBrowserBack(event) {
+    const wasArmed = browserBackArmed;
+    browserBackArmed = event.state?.[BACK_STATE] === 'play';
+    if (!wasArmed || event.state?.[BACK_STATE] !== 'base') return;
+    navigateBack('browser');
+    if (game.screen !== 'title') armGameBack();
+  }
   function navigateTo(id, opts) {
     opts = opts || {};
     if (!screens[id]) return;
+    const active = document.activeElement;
+    if (active?.dataset.action && screens[game.screen]?.contains(active)) screenFocus.set(game.screen, active.dataset.action);
     if (opts.addToHistory !== false && game.screen && game.screen !== id) game.history.push(game.screen);
     Object.values(screens).forEach(s => s.classList.add('hidden'));
     if (!screens[id]) return;
@@ -326,18 +350,46 @@
     game.keys = {}; game.tapped = {};
     game.comboBuffer.length = 0;
     onScreenEnter(id);
-    focusFirst(screens[id]);
+    focusFirst(screens[id], opts.restoreFocus ? screenFocus.get(id) : null);
+    if (id !== 'title') armGameBack();
     // run the game loop only while a match is on screen (battery: no idle loop)
     if (id === 'match') startLoop(); else stopLoop();
   }
-  function navigateBack() {
-    if (!game.history.length) { navigateTo('title', { addToHistory: false }); return; }
-    navigateTo(game.history.pop(), { addToHistory: false });
+  function navigateBack(source = 'app') {
+    if (game.screen === 'match') { pauseMatch(); return; }
+    if (game.screen === 'shootout' || game.screen === 'setpiece') { pauseMini(); return; }
+    if (game.screen === 'pause' || game.screen === 'mini-pause') {
+      if (source === 'browser') quitToTitle();
+      else if (game.screen === 'mini-pause') resumeMini();
+      else resumeMatch();
+      return;
+    }
+    if (game.screen === 'team-select' && game.ts.step === 1) {
+      game.ts.step = 0;
+      game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.ts.you));
+      renderTeamSelect();
+      focusFirst(screens['team-select']);
+      return;
+    }
+    if (game.screen === 'subs' && game._subOff) { cancelSubSelection(); return; }
+    if (game.screen === 'confirm') game._pendingAction = null;
+    if (game.screen === 'title') {
+      if (source === 'browser') window.history.back();
+      return;
+    }
+    const previous = game.history.pop() || 'title';
+    if (game.screen === 'lineups' && previous === 'team-select') {
+      game.ts.mode = game.watching ? 'watch' : null;
+      game.ts.step = 1;
+      game.ts.idx = Math.max(0, TEAMS.findIndex(t => t.id === game.away.teamId));
+    }
+    navigateTo(previous, { addToHistory: false, restoreFocus: true });
   }
-  function focusFirst(c) {
+  function focusFirst(c, action) {
     const preferred = {'team-select':'team-confirm',lineups:'kickoff-go',pause:'resume',match:'match-action',shootout:'mini-action',setpiece:'mini-action','mini-pause':'mini-resume',confirm:'confirm-cancel',career:'career-play',cup:'cup-play',league:'league-play',worldcup:'worldcup-advance',tournaments:'goto-cup'}[c.id];
     const list = focusableItems(c);
-    const el = list.find(e => e.dataset.action === preferred) || list[0];
+    const el = list.find(e => e.dataset.action === action) || list.find(e => e.dataset.action === preferred)
+      || (c.id === 'subs' && (list.find(e => /^sub-(on|off):/.test(e.dataset.action)) || list.find(e => e.dataset.action === 'subs-auto'))) || list[0];
     // A glasses pinch can follow a swipe immediately. Focus must belong to the
     // new screen before the next input, not to a hidden button until a timer runs.
     if (el) { el.focus({preventScroll:true}); el.scrollIntoView({block:'nearest'}); }
@@ -593,7 +645,7 @@
       if ((game.matchMode === 'career' || game.matchMode === 'careerCup') && game.career) {
         for (const tm of [game.home,game.away]) if (tm.teamId === game.career.team) tm.def = boostedDef(tm.def,game.career.boosts);
       }
-      if (snap.watching || snap.allAI || snap.matchMode === 'watch') enterWatch();   // resume a saved spectator match as a spectator
+      if (snap.watching || snap.allAI || (snap.matchMode === 'watch' && snap.watching == null && snap.allAI == null)) enterWatch();
       else { game.watching = false; game._allAI = false; }
       game.activeId = snap.activeId; game.activeLockT = snap.activeLockT || 0;
       game.lastTouch = snap.lastTouch || 'away'; game.lastKicker = snap.lastKicker || null; game.lastTouchPlayer = snap.lastTouchPlayer || null;
@@ -616,7 +668,13 @@
       return true;
     } catch (e) { return false; }
   }
-  function saveMatch() { try { const s = serializeMatch(); if (s) localStorage.setItem(LS_MATCH, JSON.stringify(s)); } catch (e) {} }
+  function saveMatch() {
+    // Once back at title/setup, pagehide must not replace a parked penalty or
+    // set-piece snapshot with the old regulation match still held in memory.
+    const screen = game.screen === 'confirm' ? game.history.at(-1) : game.screen;
+    if (!['match','lineups','pause','subs','halftime','shootout','setpiece','mini-pause'].includes(screen)) return;
+    try { const s = serializeMatch(); if (s) localStorage.setItem(LS_MATCH, JSON.stringify(s)); } catch (e) {}
+  }
   function clearMatch() { try { localStorage.removeItem(LS_MATCH); } catch (e) {} }
   function loadMatchSnap() { try { const s = localStorage.getItem(LS_MATCH); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
   function hasSavedMatch() { const s = loadMatchSnap(); return validMatch(s) && compatibleMatch(s); }
@@ -696,7 +754,8 @@
     const col = pct > 60 ? 'var(--grn)' : pct > 35 ? 'var(--gold)' : 'var(--red)';
     return `<span class="fit-bar"><span class="fit-fill" style="width:${pct}%;background:${col}"></span></span><span class="fit-pct">${pct}</span>`;
   }
-  function renderSubs() {
+  function renderSubs(preferredAction) {
+    const activeAction = preferredAction || (screens.subs.contains(document.activeElement) ? document.activeElement.dataset.action : null);
     const t = game.home; if (!t) return;
     $('subs-meta').textContent = `${t.subsLeft} sub${t.subsLeft === 1 ? '' : 's'} left`;
     const ab = $('subs-auto'); if (ab) ab.textContent = game.settings.autoSub ? 'ON' : 'OFF';
@@ -717,7 +776,12 @@
         .map(p => `<button class="sub-row focusable" data-action="sub-on:${p.id}"><span class="sub-num">#${p.num}</span><span class="sub-role">${p.role}</span>${fitBar(p)}</button>`).join('')
         + `<button class="sub-row sub-cancel focusable" data-action="sub-cancel">✕ Cancel</button>`;
     }
-    focusFirst(screens['subs']);
+    focusFirst(screens.subs, activeAction);
+  }
+  function cancelSubSelection() {
+    const off = game._subOff;
+    game._subOff = null;
+    renderSubs(off ? 'sub-off:' + off : null);
   }
 
   function crestStyle(t) {
@@ -748,11 +812,12 @@
     $('ts-dots').innerHTML = TEAMS.map((_, i) => `<span class="ts-dot ${i===ts.idx?'on':''}"></span>`).join('');
     const dEl = $('ts-diff'); if (dEl) { dEl.classList.toggle('hidden', watch || shoot); dEl.textContent = `Difficulty · ${game.settings.difficulty}`; }
   }
-  function tsMove(d) {
+  function tsMove(d, action) {
     game.ts.idx = (game.ts.idx + d + TEAMS.length) % TEAMS.length;
     renderTeamSelect();
-    // Team-changing gestures always return pinch to the advertised confirmation.
-    focusFirst(screens['team-select']);
+    // Swipes browse with Confirm ready; a pinched carousel button stays selected
+    // so the next pinch still performs the action under the highlight.
+    focusFirst(screens['team-select'], action);
   }
   function tsConfirm() {
     const ts = game.ts;
@@ -994,12 +1059,14 @@
       tm.players.forEach(bump); tm.bench.forEach(bump);
     });
   }
-  function startMatch(homeId, awayId, mode) {
+  function startMatch(homeId, awayId, mode, watching = mode === 'watch') {
     clearTimeout(miniTimer);miniPending=null;stopSpLoop();
     clearTimeout(toastT);clearTimeout(sayT);$('match-toast')?.classList.remove('show');$('commentary')?.classList.remove('show');
     _seed = (Date.now() & 0x7fffffff) ^ 0x9e3779b9;
     game._elapsed=0;game._passUntil=0;game._passTo=null;game.keys={};game.tapped={};game.steer={x:0,y:0};game.lastSteerT=-10;
     game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
+    // A cancelled Watch setup must not hand the next ordinary match to the AI.
+    game.watching = !!watching; game._allAI = game.watching;
     game.matchContext = competitionContext(game.matchMode, homeId, awayId);
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
@@ -1021,9 +1088,9 @@
     resetPositions(game.kickoffTeam, true);
     game.motm = null; game.ticker = null;
     saveStore();
-    game.history = ['title'];
-    saveMatch();                                   // make the fresh match resumable straight away
+    game.history = game.screen === 'team-select' && ['friendly','watch'].includes(game.matchMode) ? ['title','team-select'] : ['title'];
     navigateTo('lineups', { addToHistory: false });   // team-sheet intro, then pinch to kick off
+    saveMatch();                                   // make the fresh match resumable straight away
   }
   function kickoffGo() {
     navigateTo('match', { addToHistory: false });
@@ -1110,6 +1177,7 @@
   // INPUT
   // ============================================================
   function setupInput() {
+    window.addEventListener('popstate', onBrowserBack);
     for(const id of ['shootout','setpiece']){const btn=document.createElement('button');btn.className='match-menu focusable';btn.dataset.action='mini-menu';btn.textContent='☰ Menu';$(id).querySelector('.hud').appendChild(btn);}
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
@@ -1300,10 +1368,16 @@
     const key = KEY_ALIAS[e.key] || e.key;
     SFX.resume();
     if(key==='Tab'){moveFocus(e.shiftKey?'up':'down');e.preventDefault();return;}
-    if (e.repeat && (DIRV[key] || key === 'Enter' || key === 'Escape')) { e.preventDefault(); return; }
+    const nativeBack = ['BrowserBack','GoBack','Backspace'].includes(key) || (key === 'ArrowLeft' && e.altKey);
+    if (e.repeat && (DIRV[key] || key === 'Enter' || key === 'Escape' || nativeBack)) { e.preventDefault(); return; }
+    if (key === 'Escape' || nativeBack) {
+      e.preventDefault();
+      navigateBack(nativeBack ? 'browser' : 'app');
+      return;
+    }
 
     if(['shootout','setpiece'].includes(game.screen)){
-      if(key==='Escape'||(key==='Enter'&&document.activeElement?.dataset.action==='mini-menu')){pauseMini();e.preventDefault();return;}
+      if(key==='Enter'&&document.activeElement?.dataset.action==='mini-menu'){pauseMini();e.preventDefault();return;}
       if(DIRV[key]&&!e._directControl){recordCombo(key);if(game.screen==='mini-pause'){e.preventDefault();return;}}
     }
     // penalty shootout has its own input model
@@ -1311,12 +1385,6 @@
     if (game.screen === 'setpiece') { if (DIRV[key] || key === 'Enter') { if (performance.now() >= game.guardUntil) spInput(key); e.preventDefault(); } return; }
 
     const inMatch = game.screen === 'match' && game.phase !== 'ended';
-
-    if (key === 'Escape') {
-      if(game.screen==='mini-pause'){resumeMini();e.preventDefault();return;}
-      if (inMatch) pauseMatch(); else navigateBack();
-      e.preventDefault(); return;
-    }
 
     if (inMatch) {
       if(key==='Enter'&&document.activeElement?.dataset.action==='match-menu'){pauseMatch();e.preventDefault();return;}
@@ -1338,10 +1406,7 @@
       if (key === 'ArrowRight') { tsMove(+1); e.preventDefault(); return; }
       if (key === 'ArrowUp' || key === 'ArrowDown') { moveFocus(key === 'ArrowUp' ? 'up':'down'); e.preventDefault(); return; }
       if (key === 'Enter') {
-        const a = document.activeElement;
-        if (a && a.classList.contains('focusable') && a.dataset.action && a.dataset.action !== 'team-confirm') a.click();
-        else tsConfirm();
-        e.preventDefault(); return;
+        e.preventDefault(); activateFocused(); return;
       }
       return;
     }
@@ -1353,10 +1418,13 @@
       case 'ArrowLeft': moveFocus('left'); e.preventDefault(); break;
       case 'ArrowRight': moveFocus('right'); e.preventDefault(); break;
       case 'Enter':
-        if (!focusableItems(screens[game.screen]).includes(document.activeElement)) focusFirst(screens[game.screen]);
-        if (focusableItems(screens[game.screen]).includes(document.activeElement)) document.activeElement.click();
-        e.preventDefault(); break;
+        e.preventDefault(); activateFocused(); break;
     }
+  }
+  function activateFocused() {
+    const screen = screens[game.screen];
+    if (!focusableItems(screen).includes(document.activeElement)) focusFirst(screen);
+    if (focusableItems(screen).includes(document.activeElement)) document.activeElement.click();
   }
   function onKeyUp(e) { const k = KEY_ALIAS[e.key] || e.key; if (DIRV[k]) game.keys[k] = false; }
 
@@ -1418,7 +1486,7 @@
     }
     // substitution picks carry the player id in the action string
     if (action.indexOf('sub-off:') === 0) { game._subOff = action.slice(8); renderSubs(); return; }
-    if (action.indexOf('sub-on:') === 0) { if (game._subOff) { doSub(game.home, game._subOff, action.slice(7)); game._subOff = null; renderSubs(); } return; }
+    if (action.indexOf('sub-on:') === 0) { if (game._subOff) { const incoming = action.slice(7); doSub(game.home, game._subOff, incoming); game._subOff = null; renderSubs('sub-off:' + incoming); } return; }
     if (action.indexOf('ct-buy:') === 0) { careerBuy(action.slice(7)); return; }
     switch (action) {
       case 'confirm-cancel': game._pendingAction=null; navigateBack(); break;
@@ -1479,8 +1547,8 @@
       case 'start-tutorial': startTutorial(); break;
       case 'goto-settings': navigateTo('settings'); break;
       case 'back': navigateBack(); break;
-      case 'team-prev': tsMove(-1); break;
-      case 'team-next': tsMove(+1); break;
+      case 'team-prev': tsMove(-1, action); break;
+      case 'team-next': tsMove(+1, action); break;
       case 'team-confirm': tsConfirm(); break;
       case 'team-random': tsRandom(); break;
       case 'ts-cycle-difficulty': cycle('difficulty', DIFF_KEYS); renderTeamSelect(); break;
@@ -1513,7 +1581,7 @@
         break;
       }
       case 'goto-subs': game._subOff = null; navigateTo('subs'); break;
-      case 'sub-cancel': game._subOff = null; renderSubs(); break;
+      case 'sub-cancel': cancelSubSelection(); break;
       case 'subs-auto': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSubs(); break;
       case 'toggle-autosub': game.settings.autoSub = !game.settings.autoSub; saveStore(); renderSettings(); break;
       case 'toggle-setpieces': game.settings.setPieces = !game.settings.setPieces; saveStore(); renderSettings(); break;
@@ -1522,10 +1590,17 @@
       case 'toggle-cam': toggleCam(); break;
       case 'toggle-chase': toggleChase(); break;
       case 'resume-second': startSecondHalf(); break;
-      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; else if (m === 'worldcup' || m === 'worldcupKO') game.history = ['worldcup']; break; }
+      case 'restart-match': { const m = game.matchMode; startMatch(game.home.teamId, game.away.teamId, m, game.watching); if (m === 'cup') game.history = ['cup']; else if (m === 'league' || m === 'leagueCup') game.history = ['league']; else if (m === 'career' || m === 'careerCup') game.history = ['career']; else if (m === 'worldcup' || m === 'worldcupKO') game.history = ['worldcup']; break; }
       case 'rematch': startMatch(game.home.teamId, game.away.teamId); break;
-      case 'quit-title': exitWatch(false); saveMatch(); game.history = []; navigateTo('title', { addToHistory:false }); break;
+      case 'quit-title': quitToTitle(); break;
     }
+  }
+  function quitToTitle() {
+    saveMatch();
+    clearTimeout(miniTimer); miniTimer = 0; miniPending = null;
+    stopSpLoop(); exitWatch(false);
+    game.history = [];
+    navigateTo('title', { addToHistory: false });
   }
   function cycle(key, vals) {
     const i = vals.indexOf(game.settings[key]);

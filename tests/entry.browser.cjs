@@ -111,7 +111,9 @@ async function teamLayout(p, name) {
       await p.keyboard.down('Escape');
       await p.keyboard.down('Escape');
       await p.keyboard.up('Escape');
-      check('Held Escape returns once and preserves current focus', (await current(p)).screen === 'title' && (await current(p)).focus === 'quick-match');
+      check('Held Escape returns only to your-team stage', (await current(p)).screen === 'team-select' && (await current(p)).step === 0 && (await current(p)).focus === 'team-confirm');
+      await p.keyboard.press('Escape');
+      check('Back from first setup stage restores the title opener', (await current(p)).screen === 'title' && (await current(p)).focus === 'choose-teams');
       // Same-task activations specifically check the removed deferred-focus race.
       await select(p, 'choose-teams');
       const immediate = await p.evaluate(() => {
@@ -152,7 +154,10 @@ async function teamLayout(p, name) {
       if (phone) await p.locator('#title [data-action="choose-teams"]').tap(); else await select(p, 'choose-teams');
       await teamLayout(p, name + ' your team'); await capture(p, name + '-team');
       if (phone) await p.locator('[data-action="team-next"]').tap(); else await press(p, 'ArrowRight');
-      await activate(p, 'click');
+      if (phone) {
+        check(name + ' team arrow stays selected after a tap', (await current(p)).focus === 'team-next');
+        await p.locator('[data-action="team-confirm"]').tap();
+      } else await activate(p, 'click');
       await teamLayout(p, name + ' opponent'); await capture(p, name + '-opponent');
       if (phone) await p.locator('[data-action="team-confirm"]').tap(); else await activate(p);
       await fit(p, name + ' line-ups'); await capture(p, name + '-lineups');

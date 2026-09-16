@@ -323,6 +323,8 @@
     if (!screens[id]) return;
     screens[id].classList.remove('hidden');
     game.screen = id;
+    game.keys = {}; game.tapped = {};
+    game.comboBuffer.length = 0;
     onScreenEnter(id);
     focusFirst(screens[id]);
     // run the game loop only while a match is on screen (battery: no idle loop)
@@ -333,13 +335,19 @@
     navigateTo(game.history.pop(), { addToHistory: false });
   }
   function focusFirst(c) {
-    const preferred = {'team-select':'team-confirm',lineups:'kickoff-go',pause:'resume',match:'match-action',shootout:'mini-action',setpiece:'mini-action','mini-pause':'mini-resume',confirm:'confirm-cancel'}[c.id];
-    const el = (preferred && c.querySelector('[data-action="'+preferred+'"]')) || [...c.querySelectorAll('.focusable:not([disabled])')].find(e=>!e.closest('.hidden'));
-    if (el) setTimeout(() => el.focus(), 0);
+    const preferred = {'team-select':'team-confirm',lineups:'kickoff-go',pause:'resume',match:'match-action',shootout:'mini-action',setpiece:'mini-action','mini-pause':'mini-resume',confirm:'confirm-cancel',career:'career-play',cup:'cup-play',league:'league-play',worldcup:'worldcup-advance',tournaments:'goto-cup'}[c.id];
+    const list = focusableItems(c);
+    const el = list.find(e => e.dataset.action === preferred) || list[0];
+    // A glasses pinch can follow a swipe immediately. Focus must belong to the
+    // new screen before the next input, not to a hidden button until a timer runs.
+    if (el) { el.focus({preventScroll:true}); el.scrollIntoView({block:'nearest'}); }
+  }
+  function focusableItems(c) {
+    return c ? [...c.querySelectorAll('.focusable:not([disabled])')].filter(e => !e.closest('.hidden') && e.getClientRects().length && getComputedStyle(e).visibility === 'visible') : [];
   }
   function moveFocus(dir) {
     const c = screens[game.screen]; if (!c) return;
-    const list = Array.from(c.querySelectorAll('.focusable:not([disabled])')).filter(e=>!e.closest('.hidden')&&e.getClientRects().length);
+    const list = focusableItems(c);
     if (!list.length) return;
     let i = list.indexOf(document.activeElement);
     if (i === -1) { list[0].focus(); return; }
@@ -402,6 +410,59 @@
   // ============================================================
   const LS = 'glasspitch_v1';
   const LS_MATCH = 'glasspitch_match_v1';   // live match snapshot (resume after exit)
+  const COMPETITION_MODES = ['cup','league','leagueCup','career','careerCup','worldcup','worldcupKO'];
+  function competitionContext(mode, homeId, awayId) {
+    if (!COMPETITION_MODES.includes(mode)) return null;
+    try {
+      let root, stage, fixture, round, you, season = 0;
+      if (mode === 'cup') { root = game.cup; stage = root; }
+      else if (mode === 'league' || mode === 'leagueCup') { root = game.league; stage = mode === 'leagueCup' ? root.cup : root; }
+      else if (mode === 'career' || mode === 'careerCup') { root = game.career; season = root.season; stage = mode === 'careerCup' ? root.cur.cup : root.cur; }
+      else { root = game.worldcup; stage = mode === 'worldcupKO' ? root.cup : root; }
+      if (!root || !stage) return null;
+      you = root.you || root.team; round = stage.round;
+      if (mode === 'cup' || mode.endsWith('Cup') || mode === 'worldcupKO') {
+        if (!stage.alive || stage.champion) return null;
+        const teams = stage.rounds[round], at = teams.indexOf(you);
+        if (at < 0 || stage.scores[round][at >> 1]) return null;
+        fixture = [you, teams[at % 2 ? at - 1 : at + 1]];
+      } else {
+        if (stage.done || (mode === 'worldcup' && stage.stage !== 'group')) return null;
+        const group = mode === 'worldcup' ? stage.groups.findIndex(ids => ids.includes(you)) : null;
+        const rd = group === null ? stage.fixtures[round] : stage.fixtures[group][round];
+        const at = rd.findIndex(pair => pair.includes(you));
+        const result = group === null ? stage.results[round][at] : stage.results[group][round][at];
+        if (at < 0 || result) return null;
+        fixture = [you, rd[at].find(id => id !== you)];
+      }
+      if (fixture[0] !== homeId || fixture[1] !== awayId) return null;
+      if (!root.saveId) root.saveId = 'competition-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      return { mode, id: root.saveId, season, round, home: homeId, away: awayId };
+    } catch (_) { return null; }
+  }
+  function compatibleMatch(snap) {
+    if (!snap) return false;
+    const s = snap.kind === 'shootout' ? snap.regulation : snap;
+    if (!s) return snap.kind === 'shootout' && snap.penalty && snap.penalty._ctx === 'standalone';
+    if (!COMPETITION_MODES.includes(s.matchMode)) return true;
+    const expected = competitionContext(s.matchMode, s.home && s.home.teamId, s.away && s.away.teamId);
+    return !!expected && (!s.matchContext || JSON.stringify(s.matchContext) === JSON.stringify(expected));
+  }
+  function invalidateCompetitionMatch(kind) {
+    const snap = loadMatchSnap(), s = snap && (snap.kind === 'shootout' ? snap.regulation : snap);
+    if (s && (s.matchMode === kind || s.matchMode === kind + 'Cup' || (kind === 'worldcup' && s.matchMode === 'worldcupKO'))) clearMatch();
+  }
+  function validPenalty(p) {
+    return !!p && TEAMS.some(t => t.id === p.you) && TEAMS.some(t => t.id === p.opp) && p.you !== p.opp &&
+      ['standalone','cup','leagueCup','careerCup','worldcupKO'].includes(p._ctx) &&
+      ['home','away'].includes(p.turn) && ['aim','result','done'].includes(p.phase) &&
+      ['hs','as','hk','ak'].every(k => Number.isInteger(p[k]) && p[k] >= 0 && p[k] <= 10000) &&
+      p.hs <= p.hk && p.as <= p.ak && Array.isArray(p.histH) && Array.isArray(p.histA) &&
+      p.histH.length === p.hk && p.histA.length === p.ak && [...p.histH,...p.histA].every(x => typeof x === 'boolean') &&
+      Number.isInteger(p.aim) && p.aim >= 0 && p.aim < 3 &&
+      (p.phase !== 'result' || (p.result && typeof p.result.scored === 'boolean')) &&
+      (p.phase !== 'done' || ['home','away'].includes(p.winner));
+  }
   function loadStore() {
     try {
       const s = JSON.parse(localStorage.getItem(LS) || '{}');
@@ -451,8 +512,9 @@
   }
 
   // ----- live match snapshot: lets you exit mid-match and continue later -----
-  function validMatch(s) {
-    if (!s || s.v !== 3 || !['play','goal','restart'].includes(s.phase || 'play') || ![1,2].includes(s.half) || !Number.isFinite(s.clockSec) || s.clockSec < 0 || s.clockSec > HALF_SIM*2) return false;
+  function validMatch(s, allowEnded) {
+    if (s && s.v === 3 && s.kind === 'shootout') return validPenalty(s.penalty) && (s.penalty._ctx === 'standalone' ? !s.regulation : validMatch(s.regulation, true));
+    if (!s || s.v !== 3 || !['play','goal','restart',...(allowEnded ? ['ended'] : [])].includes(s.phase || 'play') || ![1,2].includes(s.half) || !Number.isFinite(s.clockSec) || s.clockSec < 0 || s.clockSec > HALF_SIM*2) return false;
     const ids = new Set();
     for (const side of ['home','away']) {
       const t=s[side];
@@ -465,9 +527,15 @@
     }
     return !!s.ball && ['x','y','z','vx','vy','vz'].every(k=>Number.isFinite(s.ball[k])) && (!s.ball.owner || ids.has(s.ball.owner));
   }
-  function serializeMatch() {
+  function serializeMatch(regulation) {
+    const inShootout = game.screen === 'shootout' || (game.screen === 'mini-pause' && game._miniFrom === 'shootout');
+    if (!regulation && inShootout && validPenalty(game.penalty) && !game.penalty._settled) {
+      const snap = { v:3, kind:'shootout', seed:_seed, penalty:JSON.parse(JSON.stringify(game.penalty)), regulation:game.penalty._ctx === 'standalone' ? null : serializeMatch(true) };
+      return validMatch(snap) && compatibleMatch(snap) ? snap : null;
+    }
     if (!game.home || !game.away || !game.ball || !game.stats) return null;
-    if (game.matchMode === 'tutorial' || game.phase === 'ended') return null;
+    if (game.matchMode === 'tutorial' || (game.phase === 'ended' && !regulation)) return null;
+    if (!compatibleMatch({ matchMode:game.matchMode, matchContext:game.matchContext, home:game.home, away:game.away })) return null;
     const serTeam = (t) => ({ teamId: t.teamId, side: t.side, score: t.score, formKey: t.formKey, mentality: t.mentality,
       subsLeft: t.subsLeft, bench: (t.bench || []).map(p => ({ ...p })),
       players: t.players.map(p => ({ ...p })) });             // players are all primitives → plain copy
@@ -479,7 +547,7 @@
       home: serTeam(game.home), away: serTeam(game.away),
       ball: { ...game.ball, trail: game.ball.trail ? game.ball.trail.slice() : [] },
       clockSec: game.clockSec, half: game.half, phase: game.phase, phaseT: game.phaseT || 0,
-      matchMode: game.matchMode || 'friendly', kickoffTeam: game.kickoffTeam,
+      matchMode: game.matchMode || 'friendly', matchContext:game.matchContext || null, kickoffTeam: game.kickoffTeam,
       activeId: game.activeId, activeLockT: game.activeLockT || 0,
       lastTouch: game.lastTouch, lastKicker: game.lastKicker, lastTouchPlayer: game.lastTouchPlayer,
       concede: game._concede || null, lastWasShot: !!game._lastWasShot,
@@ -488,9 +556,18 @@
       stats: { shots: { ...game.stats.shots }, sot: { ...game.stats.sot }, fouls: { ...game.stats.fouls } },
     };
   }
-  function restoreMatch(snap) {
+  function restoreMatch(snap, allowEnded) {
     try {
-      if (!validMatch(snap)) return false;
+      if (!validMatch(snap, allowEnded) || !compatibleMatch(snap)) return false;
+      if (snap.kind === 'shootout') {
+        if (snap.regulation && !restoreMatch(snap.regulation, true)) return false;
+        clearTimeout(miniTimer); miniPending = null; stopSpLoop();
+        game.penalty = JSON.parse(JSON.stringify(snap.penalty));
+        game.phase = 'ended'; game._miniFrom = 'shootout'; game._penFast = false;
+        if (!snap.regulation) { game.matchMode = 'shootout'; game.matchContext = null; game.history = ['title']; }
+        if (Number.isInteger(snap.seed)) _seed = snap.seed;
+        return true;
+      }
       clearTimeout(miniTimer);miniPending=null;stopSpLoop();
       const rebuild = (sd) => ({
         teamId: sd.teamId, side: sd.side, def: teamById(sd.teamId), score: sd.score || 0,
@@ -511,6 +588,7 @@
       game.phaseT = Math.max(0, snap.phaseT || 0);
       game._replay = null; game._replayDelay = null; game._replayBuf = [];
       game.matchMode = snap.matchMode || 'friendly'; game.kickoffTeam = snap.kickoffTeam || 'away';
+      game.matchContext = competitionContext(game.matchMode, snap.home.teamId, snap.away.teamId);
       // Player attributes in v3 snapshots already contain transfer boosts.
       if ((game.matchMode === 'career' || game.matchMode === 'careerCup') && game.career) {
         for (const tm of [game.home,game.away]) if (tm.teamId === game.career.team) tm.def = boostedDef(tm.def,game.career.boosts);
@@ -534,13 +612,30 @@
       setupPitchGeom(); drawStaticPitch(); paintScoreboard();
       _prevBall.x = game.ball.x; _prevBall.y = game.ball.y;
       game.history = [snap.matchMode === 'cup' ? 'cup' : (snap.matchMode === 'league' || snap.matchMode === 'leagueCup') ? 'league' : (snap.matchMode === 'career' || snap.matchMode === 'careerCup') ? 'career' : (snap.matchMode === 'worldcup' || snap.matchMode === 'worldcupKO') ? 'worldcup' : 'title'];
+      if (game.matchContext) saveStore(); // persist the identity assigned to an accepted legacy competition
       return true;
     } catch (e) { return false; }
   }
   function saveMatch() { try { const s = serializeMatch(); if (s) localStorage.setItem(LS_MATCH, JSON.stringify(s)); } catch (e) {} }
   function clearMatch() { try { localStorage.removeItem(LS_MATCH); } catch (e) {} }
   function loadMatchSnap() { try { const s = localStorage.getItem(LS_MATCH); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
-  function hasSavedMatch() { const s = loadMatchSnap(); return !!(s && s.v === 3 && s.home && s.away); }
+  function hasSavedMatch() { const s = loadMatchSnap(); return validMatch(s) && compatibleMatch(s); }
+  function resumeSavedMatch() {
+    const snap = loadMatchSnap();
+    if (!snap || !restoreMatch(snap)) { clearMatch(); renderTitle(); return false; }
+    if (snap.kind === 'shootout') {
+      navigateTo('shootout', { addToHistory:false });
+      if (game.penalty.phase === 'result') scheduleMini(advancePen, 1150);
+      else if (game.penalty.phase === 'done') scheduleMini(settleShootout, 1700);
+    } else {
+      navigateTo(snap.resumeScreen === 'halftime' || (game.half === 1 && game.clockSec >= HALF_SIM) ? 'halftime' : snap.resumeScreen === 'setpiece' && game.sp ? 'setpiece' : 'match', { addToHistory:false });
+      if (game.screen === 'setpiece') {
+        if (game.sp.phase === 'power' || game.sp.phase === 'timing') startSpLoop();
+        else if (game.sp.phase === 'result') scheduleMini(() => resolveSetPiece(game.sp.result.scored, game.sp.taker), 700);
+      }
+    }
+    return true;
+  }
 
   // ============================================================
   // TITLE / SETTINGS / TEAM SELECT UI
@@ -552,9 +647,13 @@
     const cont = $('title-continue');
     if (cont) {
       const snap = loadMatchSnap();
-      const has = !!(snap && snap.v === 3 && snap.home && snap.away);
+      const has = validMatch(snap) && compatibleMatch(snap);
       cont.classList.toggle('hidden', !has);
       if (has) {
+        if (snap.kind === 'shootout') {
+          cont.textContent = `▶ Continue · Penalties · ${teamById(snap.penalty.you).code} ${snap.penalty.hs}–${snap.penalty.as} ${teamById(snap.penalty.opp).code}`;
+          return;
+        }
         const hc = teamById(snap.home.teamId).code, ac = teamById(snap.away.teamId).code;
         const mins = Math.min(90, Math.floor((snap.clockSec || 0) / 60));
         const modeLabel = { league:'League', career:'Career', cup:'Cup', leagueCup:'League Cup', careerCup:'Cup', worldcup:'World Cup', worldcupKO:'World Cup', watch:'Watch' }[snap.matchMode] || '';
@@ -631,7 +730,7 @@
     const shoot = ts.mode === 'shootout';
     $('ts-title').textContent = shoot ? (ts.step === 0 ? 'Shootout — Your Team' : 'Shootout — Opponent') : watch ? (ts.step === 0 ? 'Watch — Home Team' : 'Watch — Away Team') : ts.mode === 'rehire' ? 'Take a New Job' : ts.mode === 'worldcup' ? 'Pick Your Nation' : tour ? 'Pick Your Club' : (ts.step === 0 ? 'Select Your Team' : 'Select Opponent');
     $('ts-step').textContent = ts.mode === 'cup' ? 'CUP' : ts.mode === 'league' ? 'LEAGUE' : ts.mode === 'career' ? 'CAREER' : ts.mode === 'worldcup' ? 'WORLD CUP' : ts.mode === 'rehire' ? 'NEW JOB' : watch ? 'WATCH' : shoot ? 'SHOOTOUT' : ((ts.step + 1) + ' / 2');
-    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : ts.mode === 'worldcup' ? 'Enter World Cup' : ts.mode === 'rehire' ? 'Take the Job' : watch ? (ts.step === 0 ? 'Next' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next' : 'Start Shootout') : 'Select';
+    $('ts-confirm').textContent = ts.mode === 'cup' ? 'Enter Cup' : ts.mode === 'league' ? 'Start Season' : ts.mode === 'career' ? 'Start Career' : ts.mode === 'worldcup' ? 'Enter World Cup' : ts.mode === 'rehire' ? 'Take the Job' : watch ? (ts.step === 0 ? 'Next: Away Team' : 'Watch Match') : shoot ? (ts.step === 0 ? 'Next: Opponent' : 'Start Shootout') : (ts.step === 0 ? 'Next: Opponent' : 'View Line-ups');
     $('ts-random').classList.toggle('hidden', tour || watch || shoot || ts.step === 0);
     const t = TEAMS[ts.idx];
     const crest = $('ts-crest');
@@ -652,6 +751,8 @@
   function tsMove(d) {
     game.ts.idx = (game.ts.idx + d + TEAMS.length) % TEAMS.length;
     renderTeamSelect();
+    // Team-changing gestures always return pinch to the advertised confirmation.
+    focusFirst(screens['team-select']);
   }
   function tsConfirm() {
     const ts = game.ts;
@@ -667,7 +768,7 @@
     }
     if (ts.mode === 'shootout') {
       if (ts.step === 0) { ts.you = TEAMS[ts.idx].id; ts.step = 1; ts.idx = (ts.idx + 1) % TEAMS.length; renderTeamSelect(); }
-      else { ts.mode = null; startShootout(ts.you, TEAMS[ts.idx].id, true); }
+      else { ts.mode = null; startShootout(ts.you, TEAMS[ts.idx].id, 'standalone'); }
       return;
     }
     if (ts.step === 0) {
@@ -899,6 +1000,7 @@
     _seed = (Date.now() & 0x7fffffff) ^ 0x9e3779b9;
     game._elapsed=0;game._passUntil=0;game._passTo=null;game.keys={};game.tapped={};game.steer={x:0,y:0};game.lastSteerT=-10;
     game.matchMode = mode || 'friendly';   // set up-front so the first auto-save records the right mode starting
+    game.matchContext = competitionContext(game.matchMode, homeId, awayId);
     game.home = makeTeam(homeId, 'home', game.settings.formation);
     game.away = makeTeam(awayId, 'away', '4-3-3');
     game.home.mentality = game.settings.mentality || 'Balanced';   // your coaching choice carries in
@@ -1013,8 +1115,11 @@
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('click', e => {
       SFX.resume();
-      const el = e.target.closest('[data-action]');
-      if (el && !el.disabled && !el.closest('.hidden')) handleAction(el.dataset.action, el);
+      const el = e.target?.closest?.('[data-action]');
+      if (el && !el.disabled && !el.closest('.hidden') && el.getClientRects().length) {
+        const screen = el.closest('.screen');
+        if (!screen || screen === screens[game.screen]) handleAction(el.dataset.action, el);
+      }
     });
     setupTouchControls();
     setupAdaptiveControls();
@@ -1062,10 +1167,13 @@
     const inMini = () => game.screen === 'shootout' || game.screen === 'setpiece';
     const gameplay = () => inMatch() || inMini();
     const DIR4 = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
-    const setDir = (dir) => DIR4.forEach(k => { game.keys[k] = (k === dir); });
+    const setDir = (dir) => {
+      if (game.tutorial && !game.keys[dir]) game.tutorial.steerCount++;
+      DIR4.forEach(k => { game.keys[k] = (k === dir); });
+    };
     const clearDirs = () => DIR4.forEach(k => { game.keys[k] = false; });
     const dirOf = (dx, dy) => { if (dx * dx + dy * dy < 196) return null; return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'ArrowRight' : 'ArrowLeft') : (dy > 0 ? 'ArrowDown' : 'ArrowUp'); };   // 14px deadzone
-    const sendKey = (key) => { onKeyDown({ key, repeat: false, preventDefault() {} }); onKeyUp({ key }); };
+    const sendKey = (key) => { onKeyDown({ key, repeat: false, _directControl:true, preventDefault() {} }); onKeyUp({ key }); };
     const act = () => { if (inMatch()) onPinch(); else sendKey('Enter'); };
     let start = null, moved = false, lastTouch = 0;
     app.addEventListener('touchstart', (e) => {
@@ -1099,7 +1207,7 @@
   }
   // Bluetooth / USB gamepad support (Gamepad API) for PC + mobile browsers.
   // Left stick / D-pad = steer (routed through game.keys so the side-view rotation applies),
-  // A = pass/shoot/tackle/switch, RB/RT = dash, Start = pause; full menu navigation too.
+  // A = pass/shoot/tackle/switch; B = back; Start = pause/resume.
   let _padKeys = {}, _padPrev = {}, _padRAF = 0;
   function setupGamepad() {
     if (!navigator.getGamepads) return;
@@ -1109,11 +1217,11 @@
   }
   function gamepadLoop() { _padRAF = 0; try { pollGamepad(); } catch (e) {} _padRAF = requestAnimationFrame(gamepadLoop); }
   function releasePadKeys() { for (const k in _padKeys) { if (_padKeys[k]) { game.keys[k] = false; _padKeys[k] = false; } } }
-  function padSend(key) { onKeyDown({ key, repeat: false, preventDefault() {} }); onKeyUp({ key }); }
+  function padSend(key) { onKeyDown({ key, repeat: false, _directControl:true, preventDefault() {} }); onKeyUp({ key }); }
   function pollGamepad() {
     const pads = navigator.getGamepads(); if (!pads) return;
     let gp = null; for (let i = 0; i < pads.length; i++) { if (pads[i] && pads[i].connected) { gp = pads[i]; break; } }
-    if (!gp) { releasePadKeys(); return; }
+    if (!gp) { releasePadKeys(); _padPrev = {}; return; }
     const B = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed), AX = (i) => gp.axes[i] || 0;
     const dz = 0.35;
     let mx = 0, my = 0;
@@ -1122,21 +1230,34 @@
     if (B(14)) mx = -1; else if (B(15)) mx = 1;     // d-pad L/R
     if (B(12)) my = -1; else if (B(13)) my = 1;     // d-pad U/D
     const edge = (key, now) => { const was = !!_padPrev[key]; _padPrev[key] = now; return now && !was; };
+    // Sample every button each frame, even during screen transitions. Short-
+    // circuiting this sampling left stale pressed states on pause/reconnect.
+    const actionPressed = edge('A', B(0)), backPressed = edge('B', B(1));
+    const startPressed = edge('start', B(9)), selectPressed = edge('select', B(8));
+    if (startPressed || selectPressed) {
+      releasePadKeys();
+      if (game.screen === 'match') pauseMatch();
+      else if (['shootout','setpiece'].includes(game.screen)) pauseMini();
+      else if (game.screen === 'pause') resumeMatch();
+      else if (game.screen === 'mini-pause') resumeMini();
+      return;
+    }
     const inMatch = game.screen === 'match' && game.phase !== 'ended';
     if (inMatch) {
       const want = { ArrowUp: my < -dz, ArrowDown: my > dz, ArrowLeft: mx < -dz, ArrowRight: mx > dz };
+      if (game.tutorial && Object.keys(want).some(k => want[k] && !_padKeys[k])) game.tutorial.steerCount++;
       for (const k in want) { if (want[k]) { game.keys[k] = true; _padKeys[k] = true; } else if (_padKeys[k]) { game.keys[k] = false; _padKeys[k] = false; } }
-      if (edge('A', B(0))) { SFX.resume(); onPinch(); }                         // pass / shoot / tackle / switch
-      if (edge('start', B(9)) || edge('select', B(8))) pauseMatch();
+      if ((Math.abs(mx) > dz || Math.abs(my) > dz) && document.activeElement?.dataset.action !== (game.watching ? 'match-menu' : 'match-action')) focusFirst(screens.match);
+      if (backPressed) { releasePadKeys(); pauseMatch(); return; }
+      if (actionPressed) { SFX.resume(); onPinch(); }
       // sprint is contextual now — no manual dash button
     } else {
       releasePadKeys();
       const dir = (mx * mx + my * my) < dz * dz ? null : (Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'ArrowRight' : 'ArrowLeft') : (my > 0 ? 'ArrowDown' : 'ArrowUp'));
       if (dir && dir !== _padPrev._navdir) { _padPrev._navdir = dir; padSend(dir); }
       else if (!dir) _padPrev._navdir = null;
-      if (edge('A', B(0))) { SFX.resume(); padSend('Enter'); }
-      if (edge('start', B(9))) padSend('Enter');
-      if (edge('B', B(1))) padSend('Escape');
+      if (backPressed) padSend('Escape');
+      else if (actionPressed) { SFX.resume(); padSend('Enter'); }
     }
   }
   function setupTouchControls() {
@@ -1144,7 +1265,7 @@
     document.body.classList.toggle('is-phone', isPhone());
     root.querySelectorAll('[data-touch-key]').forEach(btn => {
       const key = btn.dataset.touchKey;
-      const press = (ev) => { ev.preventDefault(); onKeyDown({ key, repeat: false, preventDefault(){} }); };
+      const press = (ev) => { ev.preventDefault(); onKeyDown({ key, repeat: false, _directControl:true, preventDefault(){} }); };
       const release = (ev) => { ev.preventDefault(); onKeyUp({ key }); };
       btn.addEventListener('touchstart', press, { passive: false });
       btn.addEventListener('touchend', release, { passive: false });
@@ -1179,11 +1300,11 @@
     const key = KEY_ALIAS[e.key] || e.key;
     SFX.resume();
     if(key==='Tab'){moveFocus(e.shiftKey?'up':'down');e.preventDefault();return;}
-    if (e.repeat && DIRV[key]) return;           // kill EMG ghost-repeat
+    if (e.repeat && (DIRV[key] || key === 'Enter' || key === 'Escape')) { e.preventDefault(); return; }
 
     if(['shootout','setpiece'].includes(game.screen)){
       if(key==='Escape'||(key==='Enter'&&document.activeElement?.dataset.action==='mini-menu')){pauseMini();e.preventDefault();return;}
-      if(DIRV[key]){recordCombo(key);if(game.screen==='mini-pause'){e.preventDefault();return;}}
+      if(DIRV[key]&&!e._directControl){recordCombo(key);if(game.screen==='mini-pause'){e.preventDefault();return;}}
     }
     // penalty shootout has its own input model
     if (game.screen === 'shootout') { if (DIRV[key] || key === 'Enter') { if (performance.now() >= game.guardUntil) penInput(key); e.preventDefault(); } return; }
@@ -1201,7 +1322,8 @@
       if(key==='Enter'&&document.activeElement?.dataset.action==='match-menu'){pauseMatch();e.preventDefault();return;}
       if (performance.now() < game.guardUntil) { e.preventDefault(); return; }
       if (DIRV[key]) {
-        recordCombo(key);
+        focusFirst(screens.match);
+        if (!e._directControl) recordCombo(key);
         if (game.screen !== 'match') { e.preventDefault(); return; } // combo opened pause
         if (game.tutorial) game.tutorial.steerCount++;
         game.keys[key] = true; game.tapped[key] = true; e.preventDefault(); return;
@@ -1231,7 +1353,8 @@
       case 'ArrowLeft': moveFocus('left'); e.preventDefault(); break;
       case 'ArrowRight': moveFocus('right'); e.preventDefault(); break;
       case 'Enter':
-        if (document.activeElement && document.activeElement.classList.contains('focusable')) document.activeElement.click();
+        if (!focusableItems(screens[game.screen]).includes(document.activeElement)) focusFirst(screens[game.screen]);
+        if (focusableItems(screens[game.screen]).includes(document.activeElement)) document.activeElement.click();
         e.preventDefault(); break;
     }
   }
@@ -1305,11 +1428,11 @@
       case 'mini-resume': resumeMini();break;
       case 'match-menu': if(['shootout','setpiece'].includes(game.screen))pauseMini();else pauseMatch(); break;
       case 'match-action': onPinch(); break;
-      case 'resume-saved': { const snap = loadMatchSnap(); if (snap && restoreMatch(snap)) {navigateTo(snap.resumeScreen==='halftime'||(game.half===1&&game.clockSec>=HALF_SIM)?'halftime':snap.resumeScreen==='setpiece'&&game.sp?'setpiece':'match', { addToHistory:false });if(game.screen==='setpiece'){if(game.sp.phase==='power'||game.sp.phase==='timing')startSpLoop();else if(game.sp.phase==='result')scheduleMini(()=>resolveSetPiece(game.sp.result.scored,game.sp.taker),700);}} else { clearMatch(); renderTitle(); } break; }
+      case 'resume-saved': resumeSavedMatch(); break;
       case 'quick-match': {
         const you = game.ts.you || TEAMS[0].id;
         let opp = game.ts.opp; if (!opp || opp === you) { let i; do { i = Math.floor(srand()*TEAMS.length); } while (TEAMS[i].id===you); opp = TEAMS[i].id; }
-        game.ts.you = you; game.ts.opp = opp; startMatch(you, opp); break;
+        game.ts.you = you; game.ts.opp = opp; startMatch(you, opp); kickoffGo(); break;
       }
       case 'choose-teams': game.ts.mode = null; game.ts.step = 0; game.ts.idx = Math.max(0, TEAMS.findIndex(t=>t.id===game.ts.you)); if (game.ts.idx<0) game.ts.idx=0; navigateTo('team-select'); break;
       case 'goto-tournaments': navigateTo('tournaments'); break;
@@ -3157,6 +3280,7 @@
     navigateTo('team-select');
   }
   function startCup(youId) {
+    invalidateCompetitionMatch('cup');
     _seed = (Date.now() & 0x7fffffff) ^ 0x51ed2701;
     const others = shuffle(TEAMS.map(t => t.id).filter(id => id !== youId)).slice(0, 7);
     const eight = shuffle([youId].concat(others));
@@ -3192,7 +3316,7 @@
     const yi = teams.indexOf(c.you), yourPair = yi >= 0 ? (yi >> 1) : -1;
     const winners = [], scoreRow = [];
     for (let i = 0; i < n/2; i++) {
-      if (i === yourPair) { winners.push(yourWinnerId); scoreRow.push(yourScore || [game.home.score, game.away.score]); }
+      if (i === yourPair) { winners.push(yourWinnerId); const score = yourScore || [game.home.score, game.away.score]; scoreRow.push(teams[2*i] === c.you ? score : [score[1],score[0]]); }
       else { const r = simWinner(teams[2*i], teams[2*i+1]); winners.push(r.winner); scoreRow.push(r.score); }
     }
     c.scores[c.round] = scoreRow;
@@ -3272,6 +3396,7 @@
     navigateTo('team-select');
   }
   function startWorldCup(youId) {
+    invalidateCompetitionMatch('worldcup');
     _seed = (Date.now() & 0x7fffffff) ^ 0x3c0ffee1;
     const others = shuffle(TEAMS.map(t => t.id).filter(id => id !== youId));
     const groups = [shuffle([youId, others[0], others[1], others[2]]), shuffle([others[3], others[4], others[5], others[6]])];
@@ -3399,6 +3524,7 @@
     game.guardUntil = performance.now() + 220;   // swallow a stray in-flight tap so it doesn't auto-advance the aim
     SFX.whistle();
     drawPen(); penInstr();
+    saveMatch();
   }
   function aiKeeperDive() { const r = srand(); return r < 0.4 ? 0 : r < 0.8 ? 2 : 1; }
   function aiShooterAim() { const r = srand(); return r < 0.4 ? 0 : r < 0.8 ? 2 : 1; }
@@ -3426,6 +3552,7 @@
       c.ak++;
     }
     c.phase = 'result'; drawPen(); penInstr();
+    saveMatch();
     if (game._penFast) advancePen(); else scheduleMini(advancePen, 1150);
   }
   function penDecided() {
@@ -3447,20 +3574,30 @@
     c.turn = c.turn === 'home' ? 'away' : 'home';
     c.phase = 'aim'; c.aim = 1; c.result = null;
     drawPen(); penInstr();
+    saveMatch();
   }
   function penFinish(side) {
     const c = game.penalty; c.phase = 'done'; c.winner = side;
     drawPen(); penInstr();
     SFX.whistle(); if (side === 'home') SFX.goal();
+    saveMatch();
+    if (game._penFast) settleShootout(); else scheduleMini(settleShootout, c._ctx === 'standalone' ? 1900 : 1700);
+  }
+  function settleShootout() {
+    const c = game.penalty;
+    if (!c || c._settled || c.phase !== 'done') return;
     const ctx = c._ctx || (c._standalone ? 'standalone' : 'cup');
-    if (ctx === 'standalone') { if (game._penFast) navigateTo('title'); else scheduleMini(() => navigateTo('title'), 1900); return; }
+    if (ctx === 'standalone') { c._settled = true; clearMatch(); navigateTo('title'); return; }
+    if (!compatibleMatch({ matchMode:game.matchMode, matchContext:game.matchContext, home:game.home, away:game.away })) { clearMatch(); navigateTo('title'); return; }
+    c._settled = true;
+    const side = c.winner;
     const winnerId = side === 'home' ? c.you : c.opp;
     let fn;
     if (ctx === 'leagueCup') fn = () => finishSeasonCupMatch(game.league.cup, winnerId, true);
     else if (ctx === 'careerCup') fn = () => finishSeasonCupMatch(game.career.cur.cup, winnerId, false);
     else if (ctx === 'worldcupKO') fn = () => finishWorldCupKO(winnerId);
     else fn = () => finishCupMatch(winnerId);
-    if (game._penFast) fn(); else scheduleMini(fn, 1700);
+    fn(); clearMatch();
   }
   function penInstr() {
     const c = game.penalty; if (!c) return;
@@ -3805,6 +3942,7 @@
     navigateTo('team-select');
   }
   function startLeague(youId) {
+    invalidateCompetitionMatch('league');
     _seed = (Date.now() & 0x7fffffff) ^ 0x2545f491;
     const ids = shuffle(TEAMS.map(t => t.id));
     const fixtures = doubleRoundRobin(ids);                       // home & away — face every club twice
@@ -3972,6 +4110,10 @@
     "That's everything — you're ready. Pinch to start playing.",
   ];
   function startTutorial() {
+    clearTimeout(miniTimer); miniPending = null; stopSpLoop();
+    game.watching = false; game._allAI = false;
+    game._elapsed = 0; game._passUntil = 0; game._passTo = null;
+    game.ticker = null; game.mom = 0;
     _seed = 0x7a17c0de;
     const youId = game.ts.you || TEAMS[0].id;
     game.home = makeTeam(youId, 'home', game.settings.formation);
@@ -4039,7 +4181,9 @@
     setupTutStep(tut.step + 1);
   }
   function finishTutorial() {
-    game.tutorial = null; game.matchMode = 'friendly';
+    // Keep the practice roster excluded from pagehide/background saves. Only
+    // starting or restoring an actual match may make the game saveable again.
+    game.tutorial = null;
     $('tutorial-prompt').classList.add('hidden');
     game.history = []; navigateTo('title', { addToHistory:false });
   }
@@ -4067,6 +4211,7 @@
     navigateTo('team-select');
   }
   function startCareer(youId) {
+    invalidateCompetitionMatch('career');
     _seed = (Date.now() & 0x7fffffff) ^ 0x13371337;
     const rosters = {}; TEAMS.forEach(t => rosters[t.id] = genRoster(t.id));
     game.career = { team: youId, season: 1, tab: 'table', trophies: [], history: [], bootHistory: [], rosters, cur: null, seasonScorers: {},
@@ -4646,33 +4791,36 @@
     buildGoal(-CFG.PL / 2, -1); buildGoal(CFG.PL / 2, 1);
     // shared geometries — a stylised humanoid: head + jersey torso + shorts + two legs + two arms.
     // Limb geos pivot at the JOINT (top), so a per-instance X-rotation swings them through the gait.
-    const headGeo = new T.SphereGeometry(0.40, 8, 6); headGeo.translate(0, 2.86, 0);
-    const torsoGeo = new T.BoxGeometry(0.82, 1.00, 0.44); torsoGeo.translate(0, 2.00, 0);     // jersey
-    const shortsGeo = new T.BoxGeometry(0.80, 0.44, 0.46); shortsGeo.translate(0, 1.42, 0);
-    const legGeo = new T.CapsuleGeometry(0.17, 1.06, 3, 6); legGeo.translate(0, -0.70, 0);     // hip pivot at y=0, foot at y=-1.4
-    const armGeo = new T.CapsuleGeometry(0.135, 0.74, 3, 6); armGeo.translate(0, -0.50, 0);    // shoulder pivot at y=0
-    const hairGeo=new T.SphereGeometry(.414,8,4,0,Math.PI*2,0,Math.PI*.50);hairGeo.translate(0,2.92,0);
-    const sockGeo=new T.CylinderGeometry(.177,.16,.52,6);sockGeo.translate(0,-.98,0);
-    const bootGeo=new T.BoxGeometry(.32,.21,.56);bootGeo.translate(0,-1.3,.12);
-    const sleeveGeo=new T.CylinderGeometry(.19,.17,.37,6);sleeveGeo.translate(0,-.15,0);
+    const sculpted = window.PitchArt?.playerGeometry?.(T);
+    const headGeo = sculpted?.head || new T.SphereGeometry(.40,8,6).translate(0,2.86,0);
+    const torsoGeo = sculpted?.torso || new T.BoxGeometry(.82,1,.44).translate(0,2,0);
+    const shortsGeo = sculpted?.shorts || new T.BoxGeometry(.80,.44,.46).translate(0,1.42,0);
+    const legGeo = sculpted?.leg || new T.CapsuleGeometry(.17,1.06,3,6).translate(0,-.70,0);
+    const armGeo = sculpted?.arm || new T.CapsuleGeometry(.135,.74,3,6).translate(0,-.50,0);
+    const hairGeo = sculpted?.hair || new T.SphereGeometry(.414,8,4,0,Math.PI*2,0,Math.PI*.50).translate(0,2.92,0);
+    const sockGeo = sculpted?.sock || new T.CylinderGeometry(.177,.16,.52,6).translate(0,-.98,0);
+    const bootGeo = sculpted?.boot || new T.BoxGeometry(.32,.21,.56).translate(0,-1.3,.12);
+    const sleeveGeo = sculpted?.sleeve || new T.CylinderGeometry(.19,.17,.37,6).translate(0,-.15,0);
+    if (sculpted) { for (const light of scene.children.filter(o=>o.isLight)) scene.remove(light); }
     const blobGeo = new T.CircleGeometry(1.0, 16); blobGeo.rotateX(-Math.PI / 2);
-    const skinMat = new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x5b4031, emissiveIntensity: 0.3 });
+    const skinMat = sculpted ? new T.MeshBasicMaterial({color:0xffffff,vertexColors:true}) : new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x5b4031, emissiveIntensity: 0.3 });
     const blobMat = new T.MeshBasicMaterial({ color: 0x223028, transparent: true, opacity: 0.5, depthWrite: false });
     const N = 11;
     const sides = {};
     ['home', 'away'].forEach(side => {
-      const kitMat = new T.MeshLambertMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0.78 });   // jersey (team colour)
-      kitMat.map=window.PitchArt?.badgeTexture(T,side==='home'?9:7);kitMat.emissiveIntensity=.3;
-      const shortsMat = new T.MeshLambertMaterial({ color: 0xdddddd, emissive: 0x222222, emissiveIntensity: 0.72 });
+      const materials = sculpted && window.PitchArt?.playerMaterials?.(T,side);
+      const kitMat = materials?.kit || new T.MeshLambertMaterial({ color:0xffffff,emissive:0x000000,emissiveIntensity:.3 });
+      if (!materials) kitMat.map=window.PitchArt?.badgeTexture(T,side==='home'?9:7);
+      const shortsMat = materials?.shorts || new T.MeshLambertMaterial({color:0xdddddd,emissive:0x222222,emissiveIntensity:.72});
       const head   = new T.InstancedMesh(headGeo,   skinMat,   N);
       const torso  = new T.InstancedMesh(torsoGeo,  kitMat,    N);
       const shorts = new T.InstancedMesh(shortsGeo, shortsMat, N);
       const legs   = new T.InstancedMesh(legGeo,    skinMat,   N * 2);   // 2 per player (instance 2i = left, 2i+1 = right)
       const arms   = new T.InstancedMesh(armGeo,    skinMat,   N * 2);   // bare arms (skin) → clear humanoid silhouette
       const blob   = new T.InstancedMesh(blobGeo,   blobMat,   N);
-      const hair=new T.InstancedMesh(hairGeo,new T.MeshLambertMaterial({color:0x322a25}),N);
-      const socks=new T.InstancedMesh(sockGeo,new T.MeshLambertMaterial({color:0xe0eee6}),N*2);
-      const boots=new T.InstancedMesh(bootGeo,new T.MeshLambertMaterial({color:0x142327}),N*2);
+      const hair=new T.InstancedMesh(hairGeo,materials?.hair || new T.MeshLambertMaterial({color:0x322a25}),N);
+      const socks=new T.InstancedMesh(sockGeo,materials?.socks || new T.MeshLambertMaterial({color:0xe0eee6}),N*2);
+      const boots=new T.InstancedMesh(bootGeo,materials?.boots || new T.MeshLambertMaterial({color:0x142327}),N*2);
       const sleeves=new T.InstancedMesh(sleeveGeo,kitMat,N*2);
       const skins=[0xf0c49c,0xa37151,0xd69e75,0x83553e,0xe0ae89];
       for(let i=0;i<N;i++){const color=new T.Color(skins[(i+(side==='home'?1:3))%skins.length]);head.setColorAt(i,color);for(const part of [arms,legs]){part.setColorAt(i*2,color);part.setColorAt(i*2+1,color);}}
@@ -4680,11 +4828,12 @@
       sides[side] = { head, torso, shorts, legs, arms, blob,hair,socks,boots,sleeves, kitMat, shortsMat };
     });
     // ball — a bit bigger and self-lit; no glow halo, just a clean bright sphere (realistic)
-    const ballMap = ballTex(T);
-    const ball = new T.Mesh(new T.SphereGeometry(0.85, 24, 18), new T.MeshStandardMaterial({ color: 0xffffff, map: ballMap, emissive: 0xffffff, emissiveMap: ballMap, emissiveIntensity: 0.62, roughness: 0.55, metalness: 0 }));
+    const ballMap = window.PitchArt?.ballTexture?.(T) || ballTex(T);
+    const newBall = window.PitchArt?.ballGeometry?.(T), ballRadius = newBall ? 1 : .85;
+    const ball = new T.Mesh(newBall || new T.SphereGeometry(.85,14,10), new T.MeshBasicMaterial({color:0xffffff,map:ballMap,vertexColors:!!newBall}));
     // a thin dark contour so the ball keeps a defined edge against bright lines on a regular screen
     // (harmless on the additive glasses display, where dark = transparent)
-    const ballOutline = new T.Mesh(new T.SphereGeometry(0.85 * 1.12, 18, 14), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
+    const ballOutline = new T.Mesh(new T.SphereGeometry(ballRadius * 1.08, 14, 10), new T.MeshBasicMaterial({ color: 0x07101a, side: T.BackSide }));
     ball.add(ballOutline);   // parented → follows the ball automatically
     scene.add(ball);
     [ball, ballOutline].forEach(m => { m.frustumCulled = false; });
@@ -4706,7 +4855,7 @@
     const aimLine = new T.Line(aimGeo, new T.LineBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.9 })); aimLine.frustumCulled = false; scene.add(aimLine);
     const aimRingGeo = new T.RingGeometry(0.65, 1.05, 24); aimRingGeo.rotateX(-Math.PI / 2);
     const aimMarker = new T.Mesh(aimRingGeo, new T.MeshBasicMaterial({ color: 0x58d6ff, transparent: true, opacity: 0.95, depthWrite: false })); scene.add(aimMarker);
-    R3D = { T, renderer, scene, camera, ground, tex, ball, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), part: new T.Object3D(), m4: new T.Matrix4(), ready: true };
+    R3D = { T, renderer, scene, camera, ground, tex, ball, ballRadius, ballShadow, activeRing, carrierRing, chevron, beam, aimLine, aimMarker, sides, dummy: new T.Object3D(), part: new T.Object3D(), m4: new T.Matrix4(), ready: true };
     applyCam();        // pose the camera from the selected Side/Behind preset
     refresh3DKits();
   }
@@ -4714,10 +4863,10 @@
     if (!R3D || !game.home || !game.away) return;   // teams may not exist yet (3D can build before a match)
     ['home', 'away'].forEach(side => {
       const kit = teamRenderCol(side), s = R3D.sides[side];
-      s.kitMat.color.set(0xffffff); s.kitMat.emissive.set(0x18211d);
+      s.kitMat.color.set(0xffffff); if(s.kitMat.emissive)s.kitMat.emissive.set(0x18211d);
       for(let i=0;i<11;i++){const col=new R3D.T.Color(teamObj(side).players[i]?.isGK?(side==='home'?0xf498ce:0xffac65):kit);s.torso.setColorAt(i,col);s.sleeves.setColorAt(i*2,col);s.sleeves.setColorAt(i*2+1,col);}
       s.torso.instanceColor.needsUpdate=true;s.sleeves.instanceColor.needsUpdate=true;
-      s.shortsMat.color.set(shade(kit, -0.26)); s.shortsMat.emissive.set(shade(kit, -0.42));   // shorts: a darker kit shade
+      s.shortsMat.color.set(shade(kit, -0.26)); if(s.shortsMat.emissive)s.shortsMat.emissive.set(shade(kit, -0.42));
     });
   }
   // place one swinging limb: world = playerRoot × (offset · X-swing), into instance idx of mesh
@@ -4765,9 +4914,11 @@
   function render3D() {
     const r = R3D, b = game.ball;
     syncSide3D('home'); syncSide3D('away');
-    const bz = 0.85 + (b.z || 0);
+    const bz = r.ballRadius + (b.z || 0);
     r.ball.position.set(b.x - 44, bz, b.y - 52.5); r.ball.rotation.z = (b.x + b.y) * 0.22; r.ball.rotation.x = (b.y - b.x) * 0.15;
     r.ballShadow.position.set(b.x - 44, 0.02, b.y - 52.5);
+    r.ballShadow.scale.setScalar(1.15/(1+Math.max(0,b.z||0)*.025));
+    r.ballShadow.material.opacity=.45/(1+Math.max(0,b.z||0)*.07);
     // indicators (mirror the 2D colour language) — hidden during a goal replay for a clean cinematic
     const aId = (!game._allAI && !game._replay) ? game.activeId : null;
     const ap = aId ? playerById(aId) : null;

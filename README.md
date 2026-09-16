@@ -4,6 +4,7 @@ Holographic arcade soccer for **Meta Ray-Ban Display** glasses. Vanilla HTML/CSS
 
 ## Play
 
+- **Play Now** starts an exhibition immediately. **Choose Teams** lets you pick both clubs before Kick Off. In team selection, left/right changes the club and returns focus to the confirmation button; up/down selects other controls.
 - **Swipe ← ↑ → ↓** — steer the player with the cyan ring and pointer. Directions follow the selected camera. With possession you keep dribbling; off the ball, hold a direction or swipe again to keep moving.
 - **Pinch (tap / Enter)** — one context button. The chip at the bottom of the screen always shows what it does:
   - **PASS** — slide the ball to the best teammate ahead.
@@ -11,6 +12,7 @@ Holographic arcade soccer for **Meta Ray-Ban Display** glasses. Vanilla HTML/CSS
   - **TACKLE** — when defending and near the ball.
   - **SWITCH** — when far from play, pick the next presser.
 - **Menu**, **↑↓↑↓**, or **Esc** — pause. Keyboard Tab also reaches Menu; Enter and focused-button click behave consistently.
+- On a controller connected to the device running the browser, use the stick/D-pad to steer, A for the action and B/Start to pause; Start resumes. Controller and phone directional input do not trigger the glasses pause gesture.
 
 Control stays with your defender until you switch; it moves to your carrier on gaining possession and to the receiver only after a pass is caught. Teammates and keepers run automatically. Sprint is disabled. Phone controls use native touch targets and menus.
 
@@ -20,8 +22,8 @@ Control stays with your defender until you switch; it moves to your carrier on g
 - Full pitch (always on screen — no scrolling camera), 4-3-3 formations, role-based AI for both teams.
 - Two halves with a match clock, goals, throw-ins, corners, goal kicks, light fouls, possession/shots stats.
 - Difficulty (Easy/Normal/Hard/Pro) and half length (Short/Normal/Long); local W-D-L record, career and tournaments.
-- Original procedural stadium, grass and kit details; batched geometry, 600px render buffer, DPR 1 and no real-time shadows.
-- Existing `glasspitch_v1` and v3 `glasspitch_match_v1` saves remain compatible. Goal celebrations, halftime, free kicks, player attributes and match statistics survive Continue. Standalone penalty shootouts are not persistent saves.
+- Original procedural stadium and shaped players with baked shading, distinct home/away kit patterns and a higher-contrast ball; batched geometry, 600px render buffer, DPR 1 and no real-time lights or shadows in the art renderer.
+- Existing `glasspitch_v1` and v3 `glasspitch_match_v1` saves remain compatible. Goal celebrations, halftime, free kicks, player attributes, match statistics and penalty shootouts survive Continue. Replacing a competition invalidates only that competition's saved fixture, and completed tie-breaks settle once.
 
 ## Develop / test
 
@@ -43,10 +45,15 @@ __pitch.score();               // "SOL 1 – 0 VRD"
 ```sh
 node tests/browser.cjs
 node tests/edges.browser.cjs
+node tests/entry.browser.cjs
+node tests/controls.browser.cjs
+node tests/lifecycle.browser.cjs
+node tests/tutorial.browser.cjs
+node tests/art.browser.cjs
 ```
 
-Set `PITCH_URL`, `PITCH_EVIDENCE` and `PLAYWRIGHT_PATH` as needed. Defaults target local port 5223 and the installed development Playwright package. Tests use isolated browser contexts and block non-local requests. The suites cover 79 checks, including five full simulated matches, both camera/half direction projections, pause/background behavior, throw-ins, goals, free kicks, legacy saves and 390px mobile layout. Physical glasses performance still needs device confirmation; software-GPU timing is not a device benchmark.
+Set `PITCH_URL`, `PITCH_EVIDENCE` and `PLAYWRIGHT_PATH` for your local server, evidence directory and Playwright installation. Tests use isolated browser contexts and block external requests. The suites cover entry and focus, phone/controller input, five full simulated matches, both camera/half direction projections, pause/background behavior, goals, free kicks, legacy saves and complete competition fixture schedules. Physical glasses performance still needs device confirmation; software-GPU timing is not a device benchmark.
 
 ## Deploy (Render)
 
-Static site — `render.yaml` is included. Point a Render Static Site at this folder (publish path `.`), deploy, and add the resulting HTTPS URL to the glasses via the Meta AI app → Devices → Display Glasses → Web apps. Any HTTPS static host works.
+Static site — `render.yaml` is included. Run `node scripts/build-static.cjs` and publish `dist`. The build includes only eight runtime files, versions every asset dependency (including Three.js), and emits `release.json` with checksums. Keep HTML/assets revalidating through the configured cache header. The existing production URL is https://glasspitch.onrender.com/; it stays the same for installed web apps. Tests, development tools and fixtures are excluded from the published directory.

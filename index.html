@@ -30,9 +30,10 @@
         <h1 class="title-name">GLASS&nbsp;PITCH</h1>
         <div class="title-divider"></div>
         <p class="title-tagline">THE BEAUTIFUL GAME. WITHIN REACH.</p>
-        <nav class="title-menu">
+        <nav class="title-menu" aria-label="Play and game modes">
           <button class="title-btn focusable primary hidden" id="title-continue" data-action="resume-saved">Continue Match</button>
-          <button class="title-btn focusable" data-action="choose-teams">Kick Off</button>
+          <button class="title-btn focusable primary quick-play" data-action="quick-match"><span>Play Now</span><small>Start an exhibition. Straight onto the pitch.</small></button>
+          <button class="title-btn focusable" data-action="choose-teams">Choose Teams</button>
           <button class="title-btn focusable" data-action="goto-career">Career</button>
           <button class="title-btn focusable" data-action="goto-tournaments">Tournaments</button>
           <button class="title-btn focusable" data-action="goto-watch">Watch Match</button>
@@ -41,7 +42,8 @@
           <button class="title-btn focusable" data-action="goto-settings">Settings</button>
         </nav>
         <p class="title-record" id="title-record"></p>
-        <p class="title-hint">↑↓ navigate &middot; pinch to select</p>
+        <p class="title-hint">↑↓ move &middot; pinch the highlighted button</p>
+        <p class="release-label" id="release-label">Matchday update</p>
       </div>
     </div>
 
@@ -50,9 +52,9 @@
     <!-- ============================================================ -->
     <div id="team-select" class="screen hidden">
       <header class="header">
-        <button class="back-btn focusable" data-action="back">&#8592;</button>
+        <button class="back-btn focusable" data-action="back" aria-label="Back">&#8592;</button>
         <h1 id="ts-title">Select Your Team</h1>
-        <span class="header-meta" id="ts-step">1 / 2</span>
+        <span class="header-meta" id="ts-step" aria-label="Selection stage">1 / 2</span>
       </header>
 
       <div class="ts-stage">
@@ -73,10 +75,10 @@
       <button class="ts-diff focusable" data-action="ts-cycle-difficulty" id="ts-diff">Difficulty · Normal</button>
 
       <nav class="ts-actions">
-        <button class="ts-confirm focusable" data-action="team-confirm" id="ts-confirm">Select</button>
+        <button class="ts-confirm focusable" data-action="team-confirm" id="ts-confirm">Next: Opponent</button>
         <button class="ts-random focusable hidden" data-action="team-random" id="ts-random">Random Opponent</button>
       </nav>
-      <p class="ts-hint">←→ change team &middot; pinch to confirm</p>
+      <p class="ts-hint"><span>←→ change team</span><span>↑↓ move between buttons &middot; pinch select</span></p>
     </div>
 
     <!-- ============================================================ -->
@@ -452,6 +454,11 @@
       </header>
       <div class="content how-body">
         <button class="tut-cta focusable" data-action="start-tutorial">▶&nbsp; Play the Interactive Tutorial</button>
+        <div class="how-card focusable" tabindex="0">
+          <h2>Get onto the pitch</h2>
+          <p><b>Play Now</b> starts an exhibition immediately. For your own matchup, use <b>Choose Teams</b>: swipe left or right to browse, pinch <b>Next: Opponent</b>, then choose the opposition and view the line-ups. Pinch <b>Kick Off</b> to begin.</p>
+          <p>Swipe up or down to move between buttons. Pinch activates the highlighted button. On a keyboard, use the arrows and Enter; on a phone, tap a button.</p>
+        </div>
         <div class="how-card focusable" tabindex="0">
           <h2>Move</h2>
           <div class="how-row"><span class="kbd">← ↑ → ↓</span><span>Steer the player marked by the cyan ring and pointer. Directions follow the camera. With the ball you keep dribbling; off the ball a swipe moves briefly, or hold an arrow to keep running.</span></div>

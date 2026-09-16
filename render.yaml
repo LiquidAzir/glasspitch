@@ -6,6 +6,9 @@ services:
     buildCommand: node scripts/build-static.cjs
     staticPublishPath: dist
     headers:
+      - path: /manifest.webmanifest
+        name: Content-Type
+        value: application/manifest+json
       - path: /*
         name: Cache-Control
         value: public, max-age=0, must-revalidate

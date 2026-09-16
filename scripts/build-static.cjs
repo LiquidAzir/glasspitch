@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const root = fs.realpathSync(path.resolve(__dirname, '..'));
 const output = path.resolve(root, 'dist');
-const files = ['index.html', 'styles.css', 'design.css', 'art.js', 'app.js', 'three.module.js', 'favicon.png', 'manifest.webmanifest'];
+const files = ['index.html', 'styles.css', 'design.css', 'art.js', 'app.js', 'three.module.js', 'favicon.png', 'favicon-32.png', 'apple-touch-icon.png', 'icon-512.png', 'manifest.webmanifest'];
 const sources = new Map(files.map(name => {
   const raw = fs.readFileSync(path.join(root, name));
   return [name, /\.(html|css|js|webmanifest)$/.test(name) ? Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n')) : raw];

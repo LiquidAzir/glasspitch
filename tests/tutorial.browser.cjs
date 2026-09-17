@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium}=require(process.env.PLAYWRIGHT_PATH||'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_PATH||require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const base=process.env.PITCH_URL||'http://127.0.0.1:5261';
 const out=process.env.PITCH_EVIDENCE||path.resolve(__dirname,'../../.visual-review/glasspitch-round2/systems/tutorial');
 fs.mkdirSync(out,{recursive:true});

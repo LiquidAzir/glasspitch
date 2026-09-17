@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const{chromium}=require(process.env.PLAYWRIGHT_PATH||'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const{chromium}=require(process.env.PLAYWRIGHT_PATH||require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const base=process.env.PITCH_URL||'http://127.0.0.1:5261',out=process.env.PITCH_EVIDENCE||path.resolve(__dirname,'../../.visual-review/glasspitch-round2/controls');fs.mkdirSync(out,{recursive:true});
 (async()=>{const browser=await chromium.launch({headless:true}),checks=[],errors=[];const context=await browser.newContext({viewport:{width:600,height:600}});await context.route('**/*',r=>new URL(r.request().url()).origin===new URL(base).origin?r.continue():r.abort());const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base);await page.waitForFunction(()=>window.__pitch);
 const run=fn=>page.evaluate(fn),check=async(name,fn)=>{try{await fn();checks.push({name,pass:true});}catch(e){checks.push({name,pass:false,error:e.message});}};

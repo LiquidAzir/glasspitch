@@ -5,7 +5,7 @@
 // are used. Input assertions use DOM clicks, keyboard events, and native browser
 // Back. The single set-piece fixture uses an existing hook to create that state.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium}=require(process.env.PLAYWRIGHT_PATH||'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_PATH||require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const base=(process.env.PITCH_URL||'http://127.0.0.1:5271').replace(/\/$/,'');
 const out=process.env.PITCH_EVIDENCE||path.resolve(__dirname,'../../.visual-review/glasspitch-band-audit/current');
 fs.mkdirSync(out,{recursive:true});

@@ -1,6 +1,6 @@
 /* Full entry regression: real D-pad/Enter, coordinate-free focused clicks and mobile taps.
    Isolated profiles; no production state, external network, or accelerated game fixtures. */
-const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');

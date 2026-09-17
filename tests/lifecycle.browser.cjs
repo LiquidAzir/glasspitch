@@ -1,6 +1,6 @@
 /* Stateful competition fixtures plus real Continue/menu actions; disposable storage only. */
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium}=require(process.env.PLAYWRIGHT_PATH||'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_PATH||require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const url=process.env.PITCH_URL||'http://127.0.0.1:5261',out=process.env.PITCH_EVIDENCE||path.resolve(__dirname,'../../.visual-review/glasspitch-round2/systems');fs.mkdirSync(out,{recursive:true});
 (async()=>{const browser=await chromium.launch({headless:true,args:['--use-angle=swiftshader']}),ctx=await browser.newContext({viewport:{width:600,height:600}}),p=await ctx.newPage(),report={checks:[],errors:[],external:[]};await ctx.route('**/*',r=>{if(new URL(r.request().url()).origin===url)return r.continue();report.external.push(new URL(r.request().url()).origin);return r.abort();});p.on('pageerror',e=>report.errors.push(e.message));const check=(name,a,b=true)=>{assert.deepEqual(a,b,name);report.checks.push({name,pass:true});};const ev=f=>p.evaluate(f);const click=a=>p.locator('.screen:not(.hidden) [data-action="'+a+'"]').first().click();const reload=async()=>{await p.reload();await p.waitForFunction(()=>window.__pitch);};
 await p.goto(url);await p.waitForFunction(()=>window.__pitch);

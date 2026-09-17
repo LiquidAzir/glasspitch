@@ -1,5 +1,5 @@
 /* Isolated browser regressions. No cloud requests or personal saves are used. */
-const {chromium}=require(process.env.PLAYWRIGHT_PATH||'C:/Users/kgood/.codex/skills/develop-web-game/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_PATH||require('node:path').join(require('node:os').homedir(),'.codex/skills/develop-web-game/node_modules/playwright'));
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const url=process.env.PITCH_URL||'http://127.0.0.1:5223',out=process.env.PITCH_EVIDENCE||path.resolve(__dirname,'../../.visual-review/next-trio/glasspitch/tests');
 fs.mkdirSync(out,{recursive:true});const results=[],errors=[];
